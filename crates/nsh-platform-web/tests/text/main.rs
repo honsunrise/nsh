@@ -6,4 +6,9 @@
 #[allow(dead_code)]
 mod css;
 
+#[path = "../../src/text/wrap.rs"]
+#[allow(dead_code)]
+mod wrap;
+
 mod fonts;
+mod lines;

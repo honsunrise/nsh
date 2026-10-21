@@ -374,8 +374,9 @@ positions computed here with a line height equal to the font's ascent + descent,
 put it. Canvas text has no numeric variants (its `font` takes only `small-caps`; there is no `fontVariantNumeric`),
 so text with one (`tabular-nums`, ...) is measured by `measure_numeric_text` instead: a hidden span with the run's
 `font` and `font-variant-numeric`, as the run is drawn. The CSS of runs (`src/text/css.rs`: the `font` shorthand,
-generic families such as `monospace` left unquoted) depends on nothing of the browser and is tested on the host
-(`tests/text`).
+generic families such as `monospace` left unquoted) and line breaking (`src/text/wrap.rs`: break opportunities, the
+line start and end rules of CJK punctuation, the filling of lines) depend on nothing of the browser and are tested on
+the host (`tests/text`).
 
 ## Styles as classes
 
