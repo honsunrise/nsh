@@ -183,10 +183,18 @@ impl SheetMotion {
             let (x, y) = away(side, self.size());
             self.x.timing(x, SHEET_OUT_MS, Easing::EaseIn);
             self.y.timing(y, SHEET_OUT_MS, Easing::EaseIn);
-            self.fade.timing(0.0, SHEET_OUT_MS, Easing::EaseIn);
-            // Gone after the motion's time, whether or not its end is
-            // reported (a platform that stops it, one that runs none).
+            let end = self.fade.timing(0.0, SHEET_OUT_MS, Easing::EaseIn);
             let (shown, closing) = (self.shown, self.closing);
+            // Gone when the motion ends: the platform runs it and reports
+            // its end, whatever clock the app's timers follow (a test's
+            // manual one moves only as the test says).
+            spawn(async move {
+                if end.await && closing.replace(false) {
+                    shown.set(false);
+                }
+            });
+            // Or after the motion's time, whether or not its end is
+            // reported (a platform that stops it, one that runs none).
             set_timeout(
                 std::time::Duration::from_millis(SHEET_OUT_MS as u64),
                 move || {
@@ -233,8 +241,14 @@ impl SheetMotion {
         }
         self.x.timing(0.0, SHEET_IN_MS, Easing::EaseOut);
         self.y.timing(0.0, SHEET_IN_MS, Easing::EaseOut);
-        self.fade.timing(1.0, SHEET_IN_MS, Easing::EaseOut);
+        let end = self.fade.timing(1.0, SHEET_IN_MS, Easing::EaseOut);
         let (settled, closing) = (self.settled, self.closing);
+        // There when the motion ends, or after its time (as it goes).
+        spawn(async move {
+            if end.await && !closing.with(|c| *c) {
+                settled.set(true);
+            }
+        });
         set_timeout(
             std::time::Duration::from_millis(SHEET_IN_MS as u64),
             move || {
