@@ -16,29 +16,13 @@ use nsh_core::{
 };
 use rustc_hash::FxHashMap;
 
+pub(crate) use self::css::css_font;
 use crate::ffi;
 
-/// The system font stack (what `fontFamily` unset means).
-const SYSTEM_FONT: &str = "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \
-                           \"Helvetica Neue\", Arial, \"PingFang SC\", \"Noto Sans SC\", \
-                           \"Microsoft YaHei\", sans-serif";
+mod css;
 
 /// The placeholder character of an inline attachment.
 const OBJECT: char = '\u{fffc}';
-
-/// The CSS `font` shorthand of a style.
-pub(crate) fn css_font(style: &ResolvedTextStyle) -> String {
-    let family = match style.font_family {
-        Some(f) => format!("\"{}\", {SYSTEM_FONT}", f.name()),
-        None => SYSTEM_FONT.to_owned(),
-    };
-    format!(
-        "{}{} {}px {family}",
-        if style.italic { "italic " } else { "" },
-        style.font_weight,
-        style.font_size.0
-    )
-}
 
 #[derive(Default)]
 pub(crate) struct WebTextEngine {
