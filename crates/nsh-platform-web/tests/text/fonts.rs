@@ -78,3 +78,33 @@ fn the_shorthand_puts_the_family_before_the_system_stack() {
     assert!(css_font(&italic).starts_with("italic 700 14px "));
     assert_eq!(css_font(&style(Some(" "))), system);
 }
+
+#[test]
+fn numeric_variants_name_their_css() {
+    use nsh_core::FontVariant;
+
+    use crate::css::font_variant_numeric;
+
+    assert_eq!(font_variant_numeric(FontVariant(0)), None);
+    // Small caps are not numeric (canvas `font` takes them).
+    assert_eq!(
+        font_variant_numeric(FontVariant(FontVariant::SMALL_CAPS)),
+        None
+    );
+    assert_eq!(
+        font_variant_numeric(FontVariant(FontVariant::TABULAR_NUMS)).as_deref(),
+        Some("tabular-nums")
+    );
+    assert_eq!(
+        font_variant_numeric(FontVariant(
+            FontVariant::OLDSTYLE_NUMS | FontVariant::TABULAR_NUMS | FontVariant::SMALL_CAPS
+        ))
+        .as_deref(),
+        Some("oldstyle-nums tabular-nums")
+    );
+    assert_eq!(
+        font_variant_numeric(FontVariant::parse("lining-nums proportional-nums").unwrap())
+            .as_deref(),
+        Some("lining-nums proportional-nums")
+    );
+}

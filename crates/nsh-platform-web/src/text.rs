@@ -16,7 +16,7 @@ use nsh_core::{
 };
 use rustc_hash::FxHashMap;
 
-pub(crate) use self::css::css_font;
+pub(crate) use self::css::{css_font, font_variant_numeric};
 use crate::ffi;
 
 mod css;
@@ -24,10 +24,13 @@ mod css;
 /// The placeholder character of an inline attachment.
 const OBJECT: char = '\u{fffc}';
 
+/// What a measured width is keyed by: font, `font-variant-numeric`, text.
+type WidthKey = (Arc<str>, Option<Arc<str>>, String);
+
 #[derive(Default)]
 pub(crate) struct WebTextEngine {
-    /// Width of `(font, text)`.
-    widths: RefCell<FxHashMap<(Arc<str>, String), f32>>,
+    /// Width of `(font, font-variant-numeric, text)`.
+    widths: RefCell<FxHashMap<WidthKey, f32>>,
     /// Ascent and descent of a font.
     metrics: RefCell<FxHashMap<Arc<str>, (f32, f32)>>,
     /// The x height of a font (attachments in the middle of a line).
@@ -56,15 +59,21 @@ impl WebTextEngine {
         x
     }
 
-    fn width(&self, font: &Arc<str>, text: &str) -> f32 {
+    /// The width of `text` in a run style's font and numeric variant.
+    fn width(&self, font: &Arc<str>, numeric: Option<&Arc<str>>, text: &str) -> f32 {
         if text.is_empty() {
             return 0.0;
         }
-        let key = (font.clone(), text.to_owned());
+        let key = (font.clone(), numeric.cloned(), text.to_owned());
         if let Some(&w) = self.widths.borrow().get(&key) {
             return w;
         }
-        let w = ffi::measure_text(font, text);
+        let w = match numeric {
+            // Canvas cannot measure numeric variants: tabular digits are
+            // wider than the proportional ones it measures.
+            Some(numeric) => ffi::measure_numeric_text(font, numeric, text),
+            None => ffi::measure_text(font, text),
+        };
         let mut widths = self.widths.borrow_mut();
         // Bounded: a long-running app measures many distinct strings.
         if widths.len() > 20_000 {
@@ -72,6 +81,10 @@ impl WebTextEngine {
         }
         widths.insert(key, w);
         w
+    }
+
+    fn run_width(&self, run: &RunStyle, text: &str) -> f32 {
+        self.width(&run.font, run.numeric.as_ref(), text)
     }
 
     fn metrics(&self, font: &Arc<str>, size: f32) -> (f32, f32) {
@@ -94,6 +107,8 @@ impl WebTextEngine {
 pub(crate) struct RunStyle {
     pub(crate) style: ResolvedTextStyle,
     pub(crate) font: Arc<str>,
+    /// Its `font-variant-numeric`, which the width measurements take.
+    numeric: Option<Arc<str>>,
     pub(crate) ascent: f32,
     pub(crate) descent: f32,
 }
@@ -213,14 +228,13 @@ impl WebTextEngine {
         for atom in &p.atoms {
             match max {
                 Some(max) if atom.kind == AtomKind::Text && atom.width > max + 0.01 => {
-                    let font = &p.styles[atom.style as usize].font;
+                    let run = &p.styles[atom.style as usize];
                     let mut at = atom.start;
                     for c in atom.text.chars() {
                         let s = c.to_string();
                         let len = c.len_utf16() as u32;
                         atoms.push(Atom {
-                            width: self.width(font, &s)
-                                + p.styles[atom.style as usize].style.letter_spacing.0,
+                            width: self.run_width(run, &s) + run.style.letter_spacing.0,
                             text: s,
                             style: atom.style,
                             kind: AtomKind::Text,
@@ -380,11 +394,14 @@ impl TextEngine for WebTextEngine {
         for span in &text.spans {
             let style = span.style;
             let font: Arc<str> = css_font(&style).into();
+            let numeric: Option<Arc<str>> =
+                font_variant_numeric(style.font_variant).map(Into::into);
             let (ascent, descent) = self.metrics(&font, style.font_size.0);
             let index = styles.len() as u16;
             styles.push(RunStyle {
                 style,
                 font: font.clone(),
+                numeric: numeric.clone(),
                 ascent,
                 descent,
             });
@@ -401,7 +418,8 @@ impl TextEngine for WebTextEngine {
             let push = |atoms: &mut Vec<Atom>, text: String, kind, start, end| {
                 let width = match kind {
                     AtomKind::Text | AtomKind::Space => {
-                        self.width(&font, &text) + spacing * text.chars().count() as f32
+                        self.width(&font, numeric.as_ref(), &text)
+                            + spacing * text.chars().count() as f32
                     }
                     // Its placeholder's room on the line.
                     AtomKind::Attachment(w, ..) => w,
@@ -490,6 +508,7 @@ impl TextEngine for WebTextEngine {
             styles.push(RunStyle {
                 style,
                 font,
+                numeric: None,
                 ascent,
                 descent,
             });
@@ -558,8 +577,7 @@ impl TextEngine for WebTextEngine {
             let mut width = line.width;
             if last && truncated && prepared.ellipsize != EllipsizeMode::Clip {
                 let style = pieces.last().map_or(0, |p| p.1);
-                let font = &styles[style as usize].font;
-                let ellipsis = self.width(font, "…");
+                let ellipsis = self.run_width(&styles[style as usize], "…");
                 // Drop characters from the end until the ellipsis fits.
                 while width + ellipsis > size.width.0 + 0.01 && !pieces.is_empty() {
                     let (text, style, w, kind) = pieces.pop().expect("not empty");
@@ -567,8 +585,7 @@ impl TextEngine for WebTextEngine {
                     if kind == AtomKind::Text && text.chars().count() > 1 {
                         let mut t = text;
                         t.pop();
-                        let f = &styles[style as usize].font;
-                        let nw = self.width(f, &t);
+                        let nw = self.run_width(&styles[style as usize], &t);
                         width += nw;
                         pieces.push((t, style, nw, kind));
                     }

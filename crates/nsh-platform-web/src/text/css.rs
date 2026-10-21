@@ -1,7 +1,7 @@
 //! The CSS that text is measured and drawn with. It depends on nothing of
 //! the browser, so its tests run off WebAssembly too (`tests/text`).
 
-use nsh_core::ResolvedTextStyle;
+use nsh_core::{FontVariant, ResolvedTextStyle};
 
 /// The system font stack (what `fontFamily` unset means).
 const SYSTEM_FONT: &str = "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \
@@ -20,6 +20,28 @@ pub(crate) fn css_font(style: &ResolvedTextStyle) -> String {
         style.font_weight,
         style.font_size.0
     )
+}
+
+/// The CSS `font-variant-numeric` of a style's variant (`None`: normal).
+/// Canvas text has no numeric variants, so text with one is measured in
+/// the DOM (`ffi::measure_numeric_text`).
+pub(crate) fn font_variant_numeric(variant: FontVariant) -> Option<String> {
+    let names = [
+        (FontVariant::OLDSTYLE_NUMS, "oldstyle-nums"),
+        (FontVariant::LINING_NUMS, "lining-nums"),
+        (FontVariant::TABULAR_NUMS, "tabular-nums"),
+        (FontVariant::PROPORTIONAL_NUMS, "proportional-nums"),
+    ];
+    let mut css = String::new();
+    for (bit, name) in names {
+        if variant.0 & bit != 0 {
+            if !css.is_empty() {
+                css.push(' ');
+            }
+            css.push_str(name);
+        }
+    }
+    (!css.is_empty()).then_some(css)
 }
 
 /// A `fontFamily` value as a CSS family list: one family or a
