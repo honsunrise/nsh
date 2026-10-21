@@ -2935,13 +2935,14 @@ impl<M: TextEngine> Core<M> {
         }
         if let Some(layout) = layout {
             if self.nodes[parent as usize].list.is_none() && !kind.is_root() {
+                // Before it leaves: a block above may get a fresh node.
+                self.unhoist(parent, layout);
                 let parent_layout = self.nodes[parent as usize]
                     .layout
                     .expect("block parent has layout");
                 self.layout
                     .remove_child(parent_layout, layout)
                     .expect("taffy remove");
-                self.forget_hoisted(parent);
             }
             self.needs_layout = true;
             if emit_remove
@@ -2954,23 +2955,75 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// Taffy keeps the absolutely placed children a node laid out last
-    /// (its "hoisted" children) until it lays the node out again with
-    /// children, which a node left without any never is: an absolute child
-    /// removed from it stays listed, and once its node is freed the next
-    /// layout fails. Such a node gets a fresh layout node.
-    fn forget_hoisted(&mut self, key: Key) {
+    /// Taffy keeps the out-of-flow boxes (absolutely placed) a containing
+    /// block laid out last, its "hoisted" children, and visits them again
+    /// each time it rounds the layout, also where it does not lay the block
+    /// out again and so never renews the list: a block in a `display: none`
+    /// subtree, one left with no children. A box that leaves the tree from
+    /// under such a block stays listed, and once its node is freed the next
+    /// layout panics ("invalid SlotMap key"); one still alive is rounded
+    /// against its old block too. So before `layout` (the node of a child of
+    /// `parent`) leaves, each block from `parent` up whose list holds it or
+    /// anything inside it gets a fresh layout node: the same style, context
+    /// and children, an empty list, laid out again. A block that gets one
+    /// may be absolutely placed itself: the blocks above that list its old
+    /// node get one too, so all are found before any is replaced.
+    fn unhoist(&mut self, parent: Key, layout: LayoutId) {
+        let mut renewed: Vec<Key> = Vec::new();
+        let (mut key, mut below) = (parent, layout);
+        while key != NO_KEY {
+            // Up the layout tree only: screens, modals and list cells are
+            // layout roots of their own.
+            let Some(block) = self.nodes[key as usize].layout else {
+                break;
+            };
+            if self.layout.parent(below) != Some(block) {
+                break;
+            }
+            let hoisted = self.layout.hoisted_children(block).expect("taffy node");
+            if hoisted.iter().any(|&boxed| {
+                self.layout_within(boxed, layout, block)
+                    || renewed
+                        .iter()
+                        .any(|&k| self.nodes[k as usize].layout == Some(boxed))
+            }) {
+                renewed.push(key);
+            }
+            below = block;
+            key = self.nodes[key as usize].parent;
+        }
+        // Inner blocks first: each is swapped into its parent's old node.
+        for key in renewed {
+            self.fresh_layout(key);
+        }
+    }
+
+    /// Whether layout node `node`, listed by `block`, is `root` or inside
+    /// it (it is inside `block`, so the walk ends there).
+    fn layout_within(&self, mut node: LayoutId, root: LayoutId, block: LayoutId) -> bool {
+        loop {
+            if node == root {
+                return true;
+            }
+            if node == block {
+                return false;
+            }
+            match self.layout.parent(node) {
+                Some(parent) => node = parent,
+                None => return false,
+            }
+        }
+    }
+
+    /// Gives `key` a fresh layout node in place of its own (see
+    /// [`Self::unhoist`]).
+    fn fresh_layout(&mut self, key: Key) {
         let Some(old) = self.nodes[key as usize].layout else {
             return;
         };
-        let childless = self.layout.children(old).is_ok_and(|c| c.is_empty());
-        let hoisting = self
-            .layout
-            .hoisted_children(old)
-            .is_ok_and(|h| !h.is_empty());
-        if !childless || !hoisting {
-            return;
-        }
+        let children = self.layout.children(old).expect("taffy children");
+        // Taken off first: removing `old` would orphan them.
+        self.layout.set_children(old, &[]).expect("taffy children");
         let style = self.layout.style(old).expect("taffy style").clone();
         let fresh = match self.layout.get_node_context_mut(old) {
             Some(context) => {
@@ -2980,6 +3033,9 @@ impl<M: TextEngine> Core<M> {
             None => self.layout.new_leaf(style),
         }
         .expect("taffy leaf");
+        self.layout
+            .set_children(fresh, &children)
+            .expect("taffy children");
         if let Some(parent) = self.layout.parent(old) {
             let index = self
                 .layout

@@ -7984,6 +7984,122 @@ fn a_view_that_loses_its_absolute_child_lays_out() {
     )));
 }
 
+/// An absolutely placed view leaving a block that is not laid out again (in
+/// a `display: none` subtree, which taffy hides without renewing the
+/// blocks' lists of the out-of-flow boxes they placed) lays out: the freed
+/// view must not stay listed there. Its sibling stays and keeps the block
+/// from being childless.
+#[test]
+fn an_absolute_view_leaving_a_hidden_block_lays_out() {
+    let mut c = core();
+    // 2 (hidden later) > 4 (relative: the block) > 6 (absolute), 8.
+    for (id, absolute) in [(2, false), (4, false), (6, true), (8, false)] {
+        c.apply(Op::Create { id, tag: Tag::View }).unwrap();
+        let mut props = vec![("height", StyleValue::Number(20.0))];
+        if absolute {
+            props.push(("position", StyleValue::Str("absolute")));
+        }
+        if id == 4 {
+            props.push(("position", StyleValue::Str("relative")));
+        }
+        c.apply(style_op(id, &props)).unwrap();
+    }
+    for (parent, child) in [(4, 6), (4, 8), (2, 4), (ROOT_ID, 2)] {
+        c.apply(Op::Insert {
+            parent,
+            child,
+            before: None,
+        })
+        .unwrap();
+    }
+    c.commit().unwrap();
+    c.apply(style_op(
+        2,
+        &[
+            ("height", StyleValue::Number(20.0)),
+            ("display", StyleValue::Str("none")),
+        ],
+    ))
+    .unwrap();
+    c.commit().unwrap();
+    // Out while hidden, and a new view takes the freed one's slot.
+    c.apply(Op::Release { id: 6 }).unwrap();
+    c.apply(Op::Create {
+        id: 10,
+        tag: Tag::View,
+    })
+    .unwrap();
+    c.apply(Op::Insert {
+        parent: ROOT_ID,
+        child: 10,
+        before: None,
+    })
+    .unwrap();
+    c.commit().unwrap();
+    // Shown again: the block lays its children out.
+    c.apply(style_op(2, &[("height", StyleValue::Number(30.0))]))
+        .unwrap();
+    let batch = c.commit().unwrap();
+    assert!(batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::Frame { id: 10, frame, .. } if frame.origin.y.0 == 30.0
+    )));
+}
+
+/// As above, with the block absolutely placed itself: its fresh layout node
+/// must not leave its old one listed by the block that placed it.
+#[test]
+fn an_absolute_view_leaving_a_hidden_absolute_block_lays_out() {
+    let mut c = core();
+    // 2 (hidden later) > 4 (absolute: the block) > 6 (absolute), 8.
+    for (id, absolute) in [(2, false), (4, true), (6, true), (8, false)] {
+        c.apply(Op::Create { id, tag: Tag::View }).unwrap();
+        let mut props = vec![("height", StyleValue::Number(20.0))];
+        if absolute {
+            props.push(("position", StyleValue::Str("absolute")));
+        }
+        c.apply(style_op(id, &props)).unwrap();
+    }
+    for (parent, child) in [(4, 6), (4, 8), (2, 4), (ROOT_ID, 2)] {
+        c.apply(Op::Insert {
+            parent,
+            child,
+            before: None,
+        })
+        .unwrap();
+    }
+    c.commit().unwrap();
+    c.apply(style_op(
+        2,
+        &[
+            ("height", StyleValue::Number(20.0)),
+            ("display", StyleValue::Str("none")),
+        ],
+    ))
+    .unwrap();
+    c.commit().unwrap();
+    // Out while hidden, and new views take the freed ones' slots.
+    c.apply(Op::Release { id: 6 }).unwrap();
+    for id in [10, 12] {
+        c.apply(Op::Create { id, tag: Tag::View }).unwrap();
+        c.apply(Op::Insert {
+            parent: ROOT_ID,
+            child: id,
+            before: None,
+        })
+        .unwrap();
+    }
+    c.commit().unwrap();
+    // Shown again: the blocks lay their children out.
+    c.apply(style_op(2, &[("height", StyleValue::Number(30.0))]))
+        .unwrap();
+    let batch = c.commit().unwrap();
+    assert!(batch.items.iter().any(|i| matches!(
+        i,
+        MountItem::Frame { id: 10, frame, .. } if frame.origin.y.0 == 30.0
+    )));
+}
+
 /// `measure` gives the frame in the parent and the position in the root
 /// view, minus the offsets of the scroll views around.
 #[test]
