@@ -452,6 +452,12 @@ restored by pull requests) and ignores the toolchain file's mobile targets (`RUS
 release. Files a crate reads from outside its directory (`include_bytes!`, test fixtures) go into its workflows'
 `files` in `paths.py`.
 
+## Parallel agents
+
+Subagents and teammates never run `cargo build`, `cargo test`, `cargo clippy`, `cargo xtask` or `nsh test` (several
+at once overload the machine); at most an occasional `cargo check -p <crate>` for compile errors. They write the
+code and its tests and report which tests to run; the main session runs builds and tests itself, one at a time.
+
 ## Verification after changes
 
 1. `cargo test --workspace`, plus fmt and clippy as listed above (including the Catalyst target, the macOS crates, `cargo xtask clippy-android`, on Linux the Linux crates, on Windows the Windows crates; for changes in `crates/gpui` or to what it uses, its own tests and clippy there).
