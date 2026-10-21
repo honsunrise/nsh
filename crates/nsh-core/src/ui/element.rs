@@ -1051,6 +1051,30 @@ pub trait Accessible: Element {
         });
         self
     }
+
+    /// Its value for screen readers (TS: `accessibilityValue`): where an
+    /// adjustable element is in its range, or a text that says it.
+    fn accessibility_value(
+        mut self,
+        value: impl IntoReactive<Option<crate::AccessibilityValue>>,
+    ) -> Self {
+        super::host::bind_prop(self.node(), value, |value| {
+            Prop::Accessibility(AccessibilityProp::Value(value))
+        });
+        self
+    }
+
+    /// The actions assistive technologies offer on it (TS:
+    /// `accessibilityActions`): `increment` and `decrement` for an
+    /// adjustable element, `activate`, `longpress`, or the app's own with
+    /// a label; [`Interactive::on_accessibility_action`] hears them.
+    fn accessibility_actions(mut self, actions: Vec<crate::AccessibilityActionDef>) -> Self {
+        super::host::set(
+            self.node(),
+            Prop::Accessibility(AccessibilityProp::Actions(actions)),
+        );
+        self
+    }
 }
 
 /// What an element's tooltip can be ([`Interactive::tooltip`]): a text,

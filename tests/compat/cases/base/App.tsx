@@ -9,10 +9,12 @@ import BaseButton from "./base-button";
 import BaseCheckbox from "./base-checkbox";
 import BaseDialog from "./base-dialog";
 import BaseDialogBackdrop from "./base-dialog-backdrop";
+import BaseDock from "./base-dock";
 import BaseNavPage from "./base-nav-page";
 import BaseNavStack from "./base-nav-stack";
 import BasePopups from "./base-popups";
 import BaseRadio from "./base-radio";
+import BaseResizable from "./base-resizable";
 import BaseSafeAreaKeyboard from "./base-safe-area-keyboard";
 import BaseSelectionArea from "./base-selection-area";
 import BaseSwitch from "./base-switch";
@@ -26,6 +28,7 @@ const cases: Record<string, () => JSX.Element> = {
   "base-button": BaseButton,
   "base-dialog": BaseDialog,
   "base-dialog-backdrop": BaseDialogBackdrop,
+  "base-dock": BaseDock,
   "base-nav-page": BaseNavPage,
   "base-nav-stack": BaseNavStack,
   "base-popups": BasePopups,
@@ -35,6 +38,7 @@ const cases: Record<string, () => JSX.Element> = {
   "base-switch": BaseSwitch,
   "base-checkbox": BaseCheckbox,
   "base-radio": BaseRadio,
+  "base-resizable": BaseResizable,
   "base-tabs": BaseTabs,
   "base-token": BaseToken,
 };

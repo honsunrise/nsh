@@ -16,12 +16,14 @@
 mod alert_dialog;
 mod button;
 mod checkbox;
+pub mod dock;
 mod keyboard;
 mod menu;
 mod navigation;
 mod popover;
 mod popup;
 mod radio;
+mod resizable;
 mod safe_area;
 mod selection_area;
 mod sheet;
@@ -42,6 +44,7 @@ pub use crate::{
     },
     button::{Button, ButtonElement, ButtonEvent, ButtonProps, button},
     checkbox::{Checkbox, CheckboxElement, CheckboxEvent, CheckboxProps, checkbox},
+    dock::{DockArea, DockAreaElement, DockAreaEvent, DockAreaProps, dock_area},
     keyboard::{
         AvoidBehavior, Keyboard, KeyboardAvoidingView, KeyboardAvoidingViewElement,
         KeyboardAvoidingViewProps, keyboard_avoiding_view,
@@ -58,6 +61,14 @@ pub use crate::{
     radio::{
         Radio, RadioElement, RadioEvent, RadioGroup, RadioGroupElement, RadioGroupProps,
         RadioProps, radio, radio_group,
+    },
+    resizable::{
+        HandleEdge, PANEL_MAX_SIZE, PANEL_MIN_SIZE, ResizablePanel, ResizablePanelElement,
+        ResizablePanelEvent, ResizablePanelGroup, ResizablePanelGroupElement,
+        ResizablePanelGroupEvent, ResizablePanelGroupProps, ResizablePanelProps, ResizableState,
+        ResizeHandle, ResizeHandleContext, ResizeHandleElement, ResizeHandleEvent,
+        ResizeHandleProps, ResizeHandleState, h_resizable, resizable_panel, resizable_panel_group,
+        resize_handle, v_resizable,
     },
     safe_area::{Edge, SafeAreaView, SafeAreaViewElement, SafeAreaViewProps, safe_area_view},
     selection_area::{SelectionArea, SelectionAreaElement, SelectionAreaProps, selection_area},
@@ -94,8 +105,11 @@ pub fn registry() -> Registry {
         .register::<KeyboardAvoidingView>()
         .register::<SelectionArea>()
         .register::<Checkbox>()
+        .register::<DockArea>()
         .register::<Radio>()
         .register::<RadioGroup>()
+        .register::<ResizablePanelGroup>()
+        .register::<ResizablePanel>()
         .register::<Switch>()
         .register::<Tab>()
         .register::<Tabs>()
@@ -132,6 +146,7 @@ mod tests {
                 "Button",
                 "Checkbox",
                 "ContextMenu",
+                "DockArea",
                 "KeyboardAvoidingView",
                 "Menu",
                 "MenuItem",
@@ -139,6 +154,8 @@ mod tests {
                 "Popover",
                 "Radio",
                 "RadioGroup",
+                "ResizablePanel",
+                "ResizablePanelGroup",
                 "SafeAreaView",
                 "SelectionArea",
                 "Sheet",
