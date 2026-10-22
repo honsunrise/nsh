@@ -7695,6 +7695,48 @@ mod touch {
         );
     }
 
+    /// A band dragged by its touches, dimmed while pressed.
+    #[component]
+    fn Band() -> impl IntoElement {
+        view()
+            .size(px(40.0))
+            .opacity(0.9)
+            .active(|s| s.opacity(0.5))
+            .claim_touches(TouchClaim::on_start())
+    }
+
+    #[test]
+    fn the_responder_stays_pressed_until_its_touches_end() {
+        let mut c = core();
+        c.mount_root(&crate::ui::Root::new::<Band>(|| ()));
+        let batch = c.commit().unwrap();
+        let id = batch
+            .items
+            .iter()
+            .find_map(|i| match i {
+                MountItem::ViewStyle { id, style } if style.opacity == 0.9 => Some(*id),
+                _ => None,
+            })
+            .expect("the band is mounted");
+        c.component_event(
+            ROOT_ID,
+            EventKind::Touch,
+            &touch(TouchPhase::Start, &[id], 0.0, 0.0),
+        );
+        let batch = c.commit().unwrap();
+        assert_eq!(view_style_of(&batch, id).unwrap().opacity, 0.5);
+        // The drag left the band: the platform reports it no longer pressed.
+        c.set_states(id, 0);
+        assert!(c.commit().is_none_or(|b| view_style_of(&b, id).is_none()));
+        c.component_event(
+            ROOT_ID,
+            EventKind::Touch,
+            &touch(TouchPhase::End, &[id], 80.0, 16.0),
+        );
+        let batch = c.commit().unwrap();
+        assert_eq!(view_style_of(&batch, id).unwrap().opacity, 0.9);
+    }
+
     #[test]
     fn a_pan_activation_decides_by_axis() {
         let pan = crate::PanActivation::horizontal(px(10.0), px(8.0));
