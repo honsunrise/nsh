@@ -47,6 +47,8 @@ pub(crate) struct Visual {
     outline: Option<Retained<CAShapeLayer>>,
     veil: Option<Retained<CALayer>>,
     backdrop: Option<Backdrop>,
+    /// `maskImage`'s layer, held so it is not rebuilt every frame.
+    mask_image: Option<Retained<CAGradientLayer>>,
 }
 
 struct Backdrop {
@@ -167,6 +169,12 @@ impl Visual {
         let (r, g, b, a) = style.background_color.to_f64();
         let dark = a > 0.0 && 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5;
         self.set_backdrop(view, blur, dark, local, radii, mtm);
+        // Last: the mask covers everything above, the backdrop's view included.
+        self.set_mask_image(
+            &layer,
+            effects.map_or(&[][..], |e| &e.mask_images[..]),
+            local,
+        );
     }
 
     fn set_shadows(
@@ -387,6 +395,27 @@ impl Visual {
         let mask = mask_layer(v);
         mask.setFrame(local);
         mask.setPath(Some(&rounded(local, radii)));
+    }
+
+    /// `mask-image`: a gradient whose alpha decides how much of the view is
+    /// drawn. Set on the view's own layer, so it masks the content, the
+    /// background, the shadows and the backdrop's view alike.
+    ///
+    /// CSS composites several mask layers; this draws the topmost one, which
+    /// is what a fade along one edge needs.
+    fn set_mask_image(&mut self, layer: &CALayer, masks: &[Gradient], local: CGRect) {
+        let Some(mask) = masks.first() else {
+            if self.mask_image.take().is_some() {
+                // SAFETY: clearing the mask.
+                unsafe { layer.setMask(None) };
+            }
+            return;
+        };
+        let g = self.mask_image.get_or_insert_with(CAGradientLayer::new);
+        g.setFrame(local);
+        shape_gradient(g, mask, local.size);
+        // SAFETY: the layer owns the mask, which has no superlayer of its own.
+        unsafe { layer.setMask(Some(g)) };
     }
 
     /// `backdrop-filter: blur()`: a system blur behind the content, its
