@@ -168,6 +168,11 @@ Things that were found the hard way. Read the section of the area you change bef
   real tap through XCUITest reproduced it). `PressRecognizer` is not preventable by tap recognizers on a `UIWindow`
   (`press.rs`, `is_window_tap`); edge-gesture gates are not taps and still cancel presses.
 
+- **iOS, secondary clicks**: `buttonMaskRequired` only holds touches that have buttons. A finger has none, so a tap
+  recognizer requiring the secondary button recognized every tap, and as a tap recognizer it cancelled the presses inside
+  (a `ContextMenu`'s trigger opened its menu instead of pressing). The `onContextMenu` recognizer allows only
+  `UITouchTypeIndirectPointer` touches (`mount.rs`).
+
 ## Android
 
 - **Android, JNI**: cache classes and method ids in `JNI_OnLoad`; wrap every call from the (permanently attached) engine thread in
