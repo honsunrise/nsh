@@ -314,6 +314,13 @@ pub struct DockAreaProps {
     /// The style of the indicator of each handle.
     #[prop(default)]
     pub handle_style: Prop<Style>,
+    /// The classes of the thumb of each handle: a grip centered on its
+    /// indicator, drawn upright as on a vertical line and turned a quarter
+    /// on a horizontal one (`ResizablePanelGroup`'s `handleThumbClass`).
+    pub handle_thumb_class: Prop<Option<SharedString>>,
+    /// The style of the thumb of each handle.
+    #[prop(default)]
+    pub handle_thumb_style: Prop<Style>,
     /// What screen readers say for each handle (an `adjustable` element):
     /// what dragging it resizes.
     pub handle_accessibility_label: Prop<Option<SharedString>>,
@@ -1006,9 +1013,11 @@ fn split_view(a: AreaCx, node: NodeId) -> AnyElement {
     let mut group = resizable_panel_group();
     // The app's style prop as it is (the setter takes typed styles).
     group.__element().__props_mut().handle_style = a.props.handle_style;
+    group.__element().__props_mut().handle_thumb_style = a.props.handle_thumb_style;
     let group = group
         .axis(move || axis.get())
         .handle_class(a.props.handle_class)
+        .handle_thumb_class(a.props.handle_thumb_class)
         .handle_accessibility_label(a.props.handle_accessibility_label)
         .on_resize(move |sizes: &Vec<Points>| {
             // The sizes of the visible children, in order: the hidden ones
@@ -1110,44 +1119,51 @@ fn dock_frame(a: AreaCx, placement: DockPlacement) -> AnyElement {
                         .child(region(a, placement)),
                 )
                 .child(
-                    resize_handle()
-                        .axis(axis)
-                        .edge(edge)
-                        .accessibility_label(a.props.handle_accessibility_label)
-                        .on_drag_start(move || {
-                            let from = info.get_untracked().map_or(Points::ZERO, |i| i.size);
-                            a.dock_drag.set(Some(DockDrag {
-                                placement,
-                                from,
-                                raw: from,
-                            }));
-                        })
-                        .on_drag_move(move |offset: &Points| {
-                            a.dock_drag.update(|drag| {
-                                if let Some(drag) = drag {
-                                    drag.raw = drag.from + *offset * sign;
-                                }
-                            });
-                        })
-                        .on_drag_end(move |offset: &Points| {
-                            let Some(drag) = a.dock_drag.get_untracked() else {
-                                return;
-                            };
-                            a.dock_drag.set(None);
-                            end_dock_drag(a, placement, drag.from + *offset * sign);
-                        })
-                        .child(
-                            // The indicator is the band's line, 1 point
-                            // across (the band stretches it along): the
-                            // app's class colors it, or makes it thicker.
-                            view()
-                                .map(|v| match axis {
-                                    Axis::Horizontal => v.w(HANDLE_SIZE),
-                                    Axis::Vertical => v.h(HANDLE_SIZE),
-                                })
-                                .app_class(a.props.handle_class)
-                                .inline_style(a.props.handle_style),
-                        ),
+                    {
+                        let mut handle = resize_handle();
+                        // The app's style prop as it is (the setter takes
+                        // typed styles).
+                        handle.__element().__props_mut().thumb_style = a.props.handle_thumb_style;
+                        handle
+                    }
+                    .axis(axis)
+                    .edge(edge)
+                    .thumb_class(a.props.handle_thumb_class)
+                    .accessibility_label(a.props.handle_accessibility_label)
+                    .on_drag_start(move || {
+                        let from = info.get_untracked().map_or(Points::ZERO, |i| i.size);
+                        a.dock_drag.set(Some(DockDrag {
+                            placement,
+                            from,
+                            raw: from,
+                        }));
+                    })
+                    .on_drag_move(move |offset: &Points| {
+                        a.dock_drag.update(|drag| {
+                            if let Some(drag) = drag {
+                                drag.raw = drag.from + *offset * sign;
+                            }
+                        });
+                    })
+                    .on_drag_end(move |offset: &Points| {
+                        let Some(drag) = a.dock_drag.get_untracked() else {
+                            return;
+                        };
+                        a.dock_drag.set(None);
+                        end_dock_drag(a, placement, drag.from + *offset * sign);
+                    })
+                    .child(
+                        // The indicator is the band's line, 1 point
+                        // across (the band stretches it along): the
+                        // app's class colors it, or makes it thicker.
+                        view()
+                            .map(|v| match axis {
+                                Axis::Horizontal => v.w(HANDLE_SIZE),
+                                Axis::Vertical => v.h(HANDLE_SIZE),
+                            })
+                            .app_class(a.props.handle_class)
+                            .inline_style(a.props.handle_style),
+                    ),
                 )
         },
     )
@@ -1235,24 +1251,31 @@ fn end_dock_drag(a: AreaCx, placement: DockPlacement, raw: Points) {
 
 /// What follows the pointer while a tab is dragged: the app's
 /// `renderDragPreview`, in an overlay at the pointer that takes no touches.
+/// It moves by a transform, not its frame, so the drop indicator's layout
+/// animation (`tab_group.rs`) leaves it at the pointer.
 fn drag_preview(a: AreaCx) -> AnyElement {
     let shown = computed(move || {
         a.drag.with(|drag| drag.is_some()) && a.props.render_drag_preview.with(Option::is_some)
     });
     let dragged = computed(move || a.drag.with(|drag| drag.as_ref().map(|d| d.panel.clone())));
+    let x = animated_value(0.0);
+    let y = animated_value(0.0);
+    effect(move || {
+        if let Some(at) = a.drag.with(|drag| drag.as_ref().map(|d| d.pointer)) {
+            x.set(at.x.0);
+            y.set(at.y.0);
+        }
+    });
     when(
         move || shown.get(),
         move || {
             overlay()
                 .pointer_events(PointerEvents::None)
                 .focusable(false)
-                .style_with(move |s| {
-                    let at = a
-                        .drag
-                        .with(|drag| drag.as_ref().map(|d| d.pointer))
-                        .unwrap_or_default();
-                    s.left(at.x).top(at.y)
-                })
+                .left(Points::ZERO)
+                .top(Points::ZERO)
+                .bind_translate_x(&x)
+                .bind_translate_y(&y)
                 .child(dynamic(move || {
                     let panel = dragged.get()?;
                     let tab = untracked(|| super::tab_group::tab_value(a, &panel))?;

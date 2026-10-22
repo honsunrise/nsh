@@ -13,6 +13,7 @@ use nsh_core::{
 use super::{
     resize_handle::{
         Drag, HANDLE_PADDING, HANDLE_SIZE, ResizeHandleContext, ResizeHandleState, band,
+        handle_thumb,
     },
     state::{PANEL_MAX_SIZE, PANEL_MIN_SIZE, ResizableState},
 };
@@ -39,6 +40,17 @@ pub struct ResizablePanelGroupProps {
     /// The style of each handle's indicator, over `handleClass`.
     #[prop(default)]
     pub handle_style: Prop<Style>,
+    /// The Tailwind classes of each handle's thumb: a grip centered on the
+    /// indicator's line, drawn upright as on a vertical line and turned a
+    /// quarter on a horizontal one, so one class draws it on either axis
+    /// (`h-5 w-[3px] rounded-full bg-muted-foreground opacity-0
+    /// group-hover:opacity-40 transition`). It stays the same view as the
+    /// handle's state changes, so `group-hover:` / `group-active:` changes
+    /// transition. Without it (or `handleThumbStyle`) there is none.
+    pub handle_thumb_class: Prop<Option<SharedString>>,
+    /// The style of each handle's thumb, over `handleThumbClass`.
+    #[prop(default)]
+    pub handle_thumb_style: Prop<Style>,
     /// What screen readers say for each handle: what it resizes.
     pub handle_accessibility_label: Prop<Option<SharedString>>,
     /// The content of each handle's indicator (`gpui-base`'s handle
@@ -192,7 +204,12 @@ pub fn ResizablePanelGroup(
                                 };
                                 render.render(index.to_string(), handle)
                             })
-                        })),
+                        }))
+                        .child(handle_thumb(
+                            axis,
+                            props.handle_thumb_class,
+                            props.handle_thumb_style,
+                        )),
                 )
             },
         ))

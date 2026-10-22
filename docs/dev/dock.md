@@ -81,8 +81,11 @@ every edit that keeps them.
 
 The other parts the app draws are render props as well (`renderTab` and `renderDragPreview` with a `DockTab`,
 `renderDropIndicator` with a `DockDropIndicator`, `renderDock` with a `DockInfo`, `renderEmpty`), and every part
-takes `<part>Class` / `<part>Style` (group, tab bar, tab, content, drop indicator, handle, dock, and compact's drawer,
-sheet and backdrop). The area wraps what the app renders with the behavior: a tab's press selects it, its drag moves
+takes `<part>Class` / `<part>Style` (group, tab bar, tab, content, drop indicator, handle, handle thumb, dock, and
+compact's drawer, sheet and backdrop). The drop indicator moves natively: when its target changes the area asks for a
+layout animation of that commit (`tab_group.rs` `animate_indicator`: the indicator eases to its new place, fades in on
+another group while the old one fades out; nothing with reduced motion), and the drag preview follows the pointer by
+a transform, so nothing else in such a commit changes its frame. The area wraps what the app renders with the behavior: a tab's press selects it, its drag moves
 it, a handle's drag resizes. The app draws every pixel; the area draws none.
 
 ## Drag and drop
@@ -176,6 +179,12 @@ panel where it was, and the app persists one layout.
   `group` whose child, the indicator, is the app's (`handleClass` / `handleStyle`, 1 point across and the boundary's
   full length by default, so one class draws a hairline on either axis and the dock's handles share it; and
   `renderHandle` keyed by the handle's index and drawn again on each `ResizeHandleState` change, never per move).
+  Its thumb (`handleThumbClass` / `handleThumbStyle`, `ResizeHandle`'s `thumb_class` / `thumb_style`; none without
+  them) is a grip of the app's centered on the line: one view that stays as the state changes, so `group-hover:` /
+  `group-active:` classes transition it (a new `renderHandle` render would not), drawn upright as on a vertical line
+  and turned a quarter on a horizontal one so one class serves both axes, and centered by transforms (a point half a
+  point into the line, the thumb moved back by half its size), which layout does not round
+  (`resize_handle.rs` `handle_thumb`). The band is its touches' responder, so it stays pressed for the whole drag.
 - Drags run in the core: the band claims the touches that go down on it (the touch responder; the desktops' mouse
   drags are touches too), reads the panels' laid out sizes once as the drag starts, and resizes the panel before the
   handle on every move. Nothing reaches JS until the drag ends: when it changed the sizes, the group reports every

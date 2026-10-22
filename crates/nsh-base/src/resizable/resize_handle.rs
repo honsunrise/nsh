@@ -4,8 +4,8 @@
 
 use nsh_core::{
     Cursor,
-    geometry::{Along, Axis, Edges},
-    ui::prelude::*,
+    geometry::{Along, Axis, Edges, radians},
+    ui::{Style, prelude::*},
 };
 
 /// How far a handle's band reaches on either side of the line it is
@@ -218,6 +218,15 @@ pub struct ResizeHandleProps {
     pub disabled: Prop<bool>,
     /// What screen readers say: what it resizes.
     pub accessibility_label: Prop<Option<SharedString>>,
+    /// The Tailwind classes of its thumb: a grip centered on the band's
+    /// line (at the edge it hugs), drawn upright as on a vertical line and
+    /// turned a quarter on a horizontal one, which `group-hover:` and
+    /// `group-active:` classes show, restyle and transition (it stays the
+    /// same view). Without it (or `thumb_style`) there is none.
+    pub thumb_class: Prop<Option<SharedString>>,
+    /// The style of its thumb, over `thumb_class`.
+    #[prop(default)]
+    pub thumb_style: Prop<Style>,
     /// The app's indicator, centered on the band's line (at the edge it
     /// hugs): a line that `group-hover:` and `group-active:` classes
     /// restyle while the pointer is over the band and while it is pressed
@@ -289,4 +298,74 @@ pub fn ResizeHandle(props: ResizeHandleProps, cx: Scope<ResizeHandleEvent>) -> i
         (None, Axis::Vertical) => v.left(px(0.0)).right(px(0.0)).top(-HANDLE_PADDING),
     })
     .child(props.children)
+    .child(
+        // The band's line, where the thumb centers: at the edge the band
+        // hugs, or in its middle.
+        view()
+            .absolute()
+            .pointer_events(PointerEvents::None)
+            .map(|v| {
+                let at = match edge {
+                    Some(_) => px(0.0),
+                    None => HANDLE_PADDING,
+                };
+                match (edge, axis) {
+                    (Some(HandleEdge::Trailing), Axis::Horizontal) => v.right(at),
+                    (_, Axis::Horizontal) => v.left(at),
+                    (Some(HandleEdge::Trailing), Axis::Vertical) => v.bottom(at),
+                    (_, Axis::Vertical) => v.top(at),
+                }
+            })
+            .map(|v| match axis {
+                Axis::Horizontal => v.top(px(0.0)).bottom(px(0.0)).w(HANDLE_SIZE),
+                Axis::Vertical => v.left(px(0.0)).right(px(0.0)).h(HANDLE_SIZE),
+            })
+            .child(handle_thumb(axis, props.thumb_class, props.thumb_style)),
+    )
+}
+
+/// The thumb of a handle (`handleThumbClass` / `handleThumbStyle`): a view
+/// of the app's centered on its indicator's line, a grip that `group-hover:`
+/// and `group-active:` classes show and restyle (and transition, as it stays
+/// the same view). It is drawn upright, as on a vertical line, and turned a
+/// quarter on a horizontal one, so one class draws it on either axis. Placed
+/// only when it has classes or a style; it takes no touches.
+///
+/// It is centered by transforms, which layout does not round: a point at
+/// the middle of the line (half a point into its 1 point), and the thumb
+/// moved back by half its own size around it. Centered by layout, a thumb
+/// of an even length turned a quarter would sit half a point off the line.
+pub(crate) fn handle_thumb(
+    axis: Axis,
+    class: Prop<Option<SharedString>>,
+    style: Prop<Style>,
+) -> AnyElement {
+    let half = px(0.5);
+    when(
+        move || class.with(Option::is_some) || style.with(|s| *s != Style::default()),
+        move || {
+            view()
+                .absolute()
+                .size(px(0.0))
+                .pointer_events(PointerEvents::None)
+                .map(|v| match axis {
+                    Axis::Horizontal => v.left(px(0.0)).top(relative(0.5)).translate_x(half),
+                    Axis::Vertical => v.top(px(0.0)).left(relative(0.5)).translate_y(half),
+                })
+                .child(
+                    view()
+                        .absolute()
+                        .left(px(0.0))
+                        .top(px(0.0))
+                        .translate_x(relative(-0.5))
+                        .translate_y(relative(-0.5))
+                        .map(|v| match axis {
+                            Axis::Horizontal => v,
+                            Axis::Vertical => v.rotate(radians(std::f32::consts::FRAC_PI_2)),
+                        })
+                        .child(view().flex_none().app_class(class).inline_style(style)),
+                )
+        },
+    )
+    .into_element()
 }

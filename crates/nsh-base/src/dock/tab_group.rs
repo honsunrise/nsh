@@ -28,12 +28,15 @@
 //! one move ([`AreaCx::drop_at`]); a gesture the system takes away drops
 //! nothing.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use nsh_core::{
     AccessibilityState,
     geometry::{Bounds, Point, Points},
-    ui::prelude::*,
+    ui::{LayoutAnimation, LayoutCurve, LayoutTransition, prelude::*},
 };
 
 use super::{
@@ -175,9 +178,31 @@ pub(crate) fn panel_slot(a: AreaCx, id: PanelId, shown: impl Fn() -> bool + 'sta
         }))
 }
 
+/// How long the drop indicator takes to move to another place or to fade
+/// in or out (another group's), in milliseconds.
+const INDICATOR_MOTION_MS: f32 = 160.0;
+
+/// Animates the next commit's layout changes for the drop indicator: its
+/// frame eases to the new place and indicators fade in and out. During a
+/// drag nothing else changes its frame there (the drag preview moves by a
+/// transform), so only the indicator moves. Nothing when the user asked
+/// for less motion.
+fn animate_indicator(fade: bool) {
+    if untracked(reduce_motion) {
+        return;
+    }
+    let transition = LayoutTransition::new(LayoutCurve::EaseOut, INDICATOR_MOTION_MS);
+    animate_layout(LayoutAnimation {
+        create: fade.then_some(transition),
+        update: Some(transition),
+        delete: fade.then_some(transition),
+    });
+}
+
 /// The drop indicator of group `node`: while a drag would land on it,
 /// over the part of its content frame the panel would take (all of it to
-/// merge, a half to split).
+/// merge, a half to split). It moves between those places, and fades in
+/// as it comes to another group (where the other group's fades out).
 fn drop_indicator(a: AreaCx, node: NodeId, indicator: Memo<Option<DropAt>>) -> AnyElement {
     when(
         move || indicator.with(Option::is_some),
@@ -187,6 +212,16 @@ fn drop_indicator(a: AreaCx, node: NodeId, indicator: Memo<Option<DropAt>>) -> A
                     .get()
                     .map(|t| DropPlaceholderBounds::for_placement(t.content, t.side))
             };
+            // The first place is where it appears; a later one, where it
+            // moves to.
+            let shown = Cell::new(None);
+            effect(move || {
+                let now = place();
+                let before = shown.replace(now);
+                if before != now {
+                    animate_indicator(before.is_none());
+                }
+            });
             view()
                 .absolute()
                 .pointer_events(PointerEvents::None)
