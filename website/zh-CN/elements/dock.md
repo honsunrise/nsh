@@ -292,6 +292,7 @@ const terminalOpen = signal(true);
 | `contentClass`、`contentStyle` | `.content_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个组的内容框架，面板显示在其中。 |
 | `dropIndicatorClass`、`dropIndicatorStyle` | `.drop_indicator_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 放置指示。 |
 | `handleClass`、`handleStyle` | `.handle_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个手柄的指示器，位于分栏的组之间以及每个停靠区的边缘；`group-hover:` 和 `group-active:` 跟随手柄。除非另有指定，它横跨手柄 1 点粗、与手柄等长，所以 `bg-border` 在两个方向上都是一条细线；`w-[3px]` / `h-[3px]` 可以加粗。 |
+| `handleThumbClass`、`handleThumbStyle` | `.handle_thumb_class(..)`、`.handle_thumb_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个手柄的握把：居中在线上，按竖线的方向竖着绘制，在横线上转四分之一圈，所以一个类在两个方向上都适用。手柄悬停、按下和拖动时它始终是同一个视图，所以 `group-hover:` 和 `group-active:` 类会以过渡动画改变它（`h-11 w-[3px] rounded-full bg-muted-foreground opacity-0 scale-y-0 transition group-hover:opacity-40 group-hover:scale-y-[0.45] group-active:opacity-90 group-active:scale-y-100`）。 |
 | `dockClass`、`dockStyle` | `.dock_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个停靠区的框架。 |
 | `drawerClass`、`drawerStyle` | `.drawer_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 紧凑方式：左右停靠区的抽屉。 |
 | `sheetClass`、`sheetStyle` | `.sheet_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 紧凑方式：底部停靠区的底部面板。 |
@@ -324,6 +325,7 @@ const terminalOpen = signal(true);
 | 标签页 | 标签栏里 | `tabClass`、`tabStyle`；`renderTab` | `selected:`、`active:`、`hover:` |
 | 组的内容 | 组里 | `contentClass`、`contentStyle`；`renderPanel` | |
 | 手柄的指示器 | 分栏的组之间、停靠区的边缘 | `handleClass`、`handleStyle` | `group-hover:`、`group-active:` |
+| 手柄的握把 | 居中在手柄的线上 | `handleThumbClass`、`handleThumbStyle` | `group-hover:`、`group-active:`（直到拖动结束都保持按下） |
 | 停靠区 | 边缘 | `dockClass`、`dockStyle`；`renderDock` | |
 | 放置指示 | 拖动时位于组上方 | `dropIndicatorClass`、`dropIndicatorStyle`；`renderDropIndicator` | |
 | 拖动预览 | 指针或手指下方 | `renderDragPreview` | |

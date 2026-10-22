@@ -220,4 +220,4 @@ only to inputs and the surface's bindings, and no event says a view other than a
 | `register_panel` registry | `PanelBuilder` / `PanelKeys` (the key read back from `PanelInfo::Panel({"id": key})`) |
 | `Pixels`, `gpui::Axis`, `Bounds` | `Points`, `nsh_core::geometry::Axis`, `Bounds<Points>` |
 | reconciliation against the `NodeId` entity cache | render keys (`core/renders.rs`) |
-| `ResizeHandleRenderer` | `handleClass` / `handleStyle` and `renderHandle` (`ResizeHandleContext`) |
+| `ResizeHandleRenderer` | `handleClass` / `handleStyle`, `handleThumbClass` / `handleThumbStyle` (the grip, transitioned by classes) and `renderHandle` (`ResizeHandleContext`) |

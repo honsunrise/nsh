@@ -137,6 +137,7 @@ few times per drag, never on every move.
 | `axis` | `h_resizable()`, `v_resizable()`, `.axis(..)` | `"horizontal" \| "vertical"` | `"horizontal"` | Side by side (the handles are dragged left and right) or stacked (up and down). |
 | `disabled` | `.disabled(..)` | `boolean` | `false` | No drags: the handles stay where they are. |
 | `handleClass`, `handleStyle` | `.handle_style(\|s\| ..)` | `string`, `StyleProp<ViewStyle>` | none | Each handle's indicator, on the boundary in the handle's band: 1 point across the axis and the boundary's full length unless it says otherwise (`w-[3px]`, `h-[3px]`); `group-hover:` and `group-active:` follow the band. |
+| `handleThumbClass`, `handleThumbStyle` | `.handle_thumb_class(..)`, `.handle_thumb_style(\|s\| ..)` | `string`, `StyleProp<ViewStyle>` | none | Each handle's thumb: a grip centered on the line, drawn upright as on a vertical line and turned a quarter on a horizontal one, so one class serves both axes. It stays the same view while the handle is hovered, pressed and dragged, so `group-hover:` and `group-active:` classes transition it (`h-11 w-[3px] rounded-full bg-muted-foreground opacity-0 scale-y-0 transition group-hover:opacity-40 group-hover:scale-y-[0.45] group-active:opacity-90 group-active:scale-y-100`). |
 | `renderHandle` | `.render_handle(\|handle\| ..)` | `(handle: ResizeHandleContext) => JSX.Element` | none | What is inside each indicator, drawn again when the handle's `state` changes. |
 | `handleAccessibilityLabel` | `.handle_accessibility_label(..)` | `string` | none | What screen readers say for each handle: what it resizes. They adjust it 10 points at a time. |
 | `children` | `.child(..)` | `JSX.Element` | none | The `ResizablePanel`s, its direct children. |
@@ -176,6 +177,7 @@ few times per drag, never on every move.
 | The group | | `ResizablePanelGroup`'s `class`, `style` | |
 | A panel | the group | `ResizablePanel`'s `class`, `style` | |
 | A handle's indicator | the handle's band, on a boundary | `handleClass`, `handleStyle`, `renderHandle` | `group-hover:` under a pointer, `group-active:` while pressed or dragged; `state` in `renderHandle` |
+| A handle's thumb | centered on a handle's line | `handleThumbClass`, `handleThumbStyle` | `group-hover:`, `group-active:` (pressed until the drag ends) |
 
 ## Accessibility
 

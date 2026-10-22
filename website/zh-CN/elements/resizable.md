@@ -116,6 +116,7 @@ mount(App);
 | `axis` | `h_resizable()`、`v_resizable()`、`.axis(..)` | `"horizontal" \| "vertical"` | `"horizontal"` | 并排（手柄左右拖动）或上下排列（上下拖动）。 |
 | `disabled` | `.disabled(..)` | `boolean` | `false` | 不能拖动：手柄保持不动。 |
 | `handleClass`、`handleStyle` | `.handle_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个手柄的指示器，位于手柄条带中的边界上：除非另有指定（`w-[3px]`、`h-[3px]`），它横跨方向 1 点粗、与边界等长；`group-hover:` 和 `group-active:` 跟随条带。 |
+| `handleThumbClass`、`handleThumbStyle` | `.handle_thumb_class(..)`、`.handle_thumb_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个手柄的握把：居中在线上，按竖线的方向竖着绘制，在横线上转四分之一圈，所以一个类在两个方向上都适用。手柄悬停、按下和拖动时它始终是同一个视图，所以 `group-hover:` 和 `group-active:` 类会以过渡动画改变它（`h-11 w-[3px] rounded-full bg-muted-foreground opacity-0 scale-y-0 transition group-hover:opacity-40 group-hover:scale-y-[0.45] group-active:opacity-90 group-active:scale-y-100`）。 |
 | `renderHandle` | `.render_handle(\|handle\| ..)` | `(handle: ResizeHandleContext) => JSX.Element` | 无 | 每个指示器里的内容，手柄的 `state` 变化时重新绘制。 |
 | `handleAccessibilityLabel` | `.handle_accessibility_label(..)` | `string` | 无 | 屏幕阅读器为每个手柄读出的文字：它调整的是什么。屏幕阅读器每次调整 10 点。 |
 | `children` | `.child(..)` | `JSX.Element` | 无 | `ResizablePanel`，分组的直接子元素。 |
@@ -159,6 +160,7 @@ mount(App);
 | 分组 | | `ResizablePanelGroup` 的 `class`、`style` | |
 | 面板 | 分组里 | `ResizablePanel` 的 `class`、`style` | |
 | 手柄的指示器 | 手柄条带里、边界上 | `handleClass`、`handleStyle`、`renderHandle` | 指针悬停时 `group-hover:`，按下或拖动时 `group-active:`；`renderHandle` 里的 `state` |
+| 手柄的握把 | 居中在手柄的线上 | `handleThumbClass`、`handleThumbStyle` | `group-hover:`、`group-active:`（直到拖动结束都保持按下） |
 
 <a id="accessibility"></a>
 

@@ -340,6 +340,7 @@ rest of the area.
 | `contentClass`, `contentStyle` | `.content_style(\|s\| ..)` | `string`, `StyleProp<ViewStyle>` | none | Each group's content frame, where its panels show. |
 | `dropIndicatorClass`, `dropIndicatorStyle` | `.drop_indicator_style(\|s\| ..)` | `string`, `StyleProp<ViewStyle>` | none | The drop indicator. |
 | `handleClass`, `handleStyle` | `.handle_style(\|s\| ..)` | `string`, `StyleProp<ViewStyle>` | none | The indicator of each handle, between a split's groups and at each dock's edge; `group-hover:` and `group-active:` follow the handle. It is 1 point across the handle and runs its full length unless it says otherwise, so `bg-border` is a hairline either way; `w-[3px]` / `h-[3px]` thicken it. |
+| `handleThumbClass`, `handleThumbStyle` | `.handle_thumb_class(..)`, `.handle_thumb_style(\|s\| ..)` | `string`, `StyleProp<ViewStyle>` | none | Each handle's thumb: a grip centered on the line, drawn upright as on a vertical line and turned a quarter on a horizontal one, so one class serves both axes. It stays the same view while the handle is hovered, pressed and dragged, so `group-hover:` and `group-active:` classes transition it (`h-11 w-[3px] rounded-full bg-muted-foreground opacity-0 scale-y-0 transition group-hover:opacity-40 group-hover:scale-y-[0.45] group-active:opacity-90 group-active:scale-y-100`). |
 | `dockClass`, `dockStyle` | `.dock_style(\|s\| ..)` | `string`, `StyleProp<ViewStyle>` | none | Each dock's frame. |
 | `drawerClass`, `drawerStyle` | `.drawer_style(\|s\| ..)` | `string`, `StyleProp<ViewStyle>` | none | Compact: the side docks' drawers. |
 | `sheetClass`, `sheetStyle` | `.sheet_style(\|s\| ..)` | `string`, `StyleProp<ViewStyle>` | none | Compact: the bottom dock's sheet. |
@@ -368,6 +369,7 @@ rest of the area.
 | A tab | a tab bar | `tabClass`, `tabStyle`; `renderTab` | `selected:`, `active:`, `hover:` |
 | A group's content | a group | `contentClass`, `contentStyle`; `renderPanel` | |
 | A handle's indicator | between a split's groups, at a dock's edge | `handleClass`, `handleStyle` | `group-hover:`, `group-active:` |
+| A handle's thumb | centered on a handle's line | `handleThumbClass`, `handleThumbStyle` | `group-hover:`, `group-active:` (pressed until the drag ends) |
 | A dock | an edge | `dockClass`, `dockStyle`; `renderDock` | |
 | The drop indicator | over a group during a drag | `dropIndicatorClass`, `dropIndicatorStyle`; `renderDropIndicator` | |
 | The drag preview | under the pointer or finger | `renderDragPreview` | |
