@@ -176,7 +176,7 @@ function Status(props: { children: JSX.Element; strong?: boolean }) {
 }
 
 /**
- * Dock: a `DockArea` workspace, editor tabs in a center split, files in a
+ * Dock: `nsh/base`'s `DockArea`, editor tabs in a center split, files in a
  * left dock and a terminal in a bottom dock; tabs dragged between groups
  * and to their edges, closed, the docks toggled and resized. Narrower than
  * 600 pt it shows one group at a time and presents a dock at a time, as a
@@ -187,6 +187,14 @@ export function Dock() {
   const layout = signal<DockAreaLayout>(initial());
   const locked = signal(false);
   const last = signal("—");
+  // Whether the editors' tabs offer to close them: `panels` says which
+  // may close, and `renderTab` shows a close button where `closable` is.
+  const closing = signal(true);
+  // The zoomed panel's group fills the area (`onZoomChange`). The toolbar
+  // zooms the group of the tab shown last: each tab tells its group.
+  const zoomed = signal<string | null>(null);
+  let current = "main";
+  const groups = new Map<string, number>();
   // The docks that show (`onDockOpenChange`): open ones in the full
   // presentation, none at first at compact width, where the area is less
   // than 600 wide (a phone's window).
@@ -201,6 +209,14 @@ export function Dock() {
         <Tool label="Toggle files" name="Files" toggle on={shown().left} onPress={() => area.toggleDock("left")} />
         <Tool label="Toggle terminal" name="Terminal" toggle on={shown().bottom} onPress={() => area.toggleDock("bottom")} />
         <Tool label="Lock the layout" name="Lock" toggle on={locked()} onPress={() => locked.set(!locked())} />
+        <Tool label="Show close buttons" name="Close" toggle on={closing()} onPress={() => closing.set(!closing())} />
+        <Tool
+          label="Zoom the group"
+          name="Zoom"
+          toggle
+          on={zoomed() !== null}
+          onPress={() => area.toggleZoom(zoomed() === null ? (groups.get(current) ?? null) : null)}
+        />
         <Tool label="Reset the layout" name="Reset" onPress={() => layout.set(initial())} />
         <Text class="min-w-40 flex-1 text-right text-[13px] text-faint">
           {hint("Hold a tab to reorder it", "Drag a tab onto another group, or to a group's edge to split it")}
@@ -220,7 +236,13 @@ export function Dock() {
             layout={layout()}
             onLayoutChange={(next) => layout.set(next)}
             onPanelRemove={(panel) => last.set(`Closed ${title(panel)}`)}
-            onPanelActiveChange={(panel, active) => active && last.set(`Showing ${title(panel)}`)}
+            onPanelActiveChange={(panel, active) => {
+              if (!active) return;
+              current = panel;
+              last.set(`Showing ${title(panel)}`);
+            }}
+            onZoomChange={(panel) => zoomed.set(panel)}
+            panels={closing() ? [] : Object.keys(TITLES).map((id) => ({ id, closable: false }))}
             onDockOpenChange={(placement, open) => shown.set({ ...shown(), [placement]: open })}
             locked={locked()}
             groupClass="flex-1 bg-inset"
@@ -237,7 +259,9 @@ export function Dock() {
             drawerClass="border-r border-border bg-card"
             sheetClass="rounded-t-2xl border-t border-border bg-card"
             backdropClass="bg-black/40"
-            renderTab={(tab) => (
+            renderTab={(tab) => {
+              groups.set(tab.panel, tab.group);
+              return (
               // Sized to its title, as wide on either side of it, on the
               // content's surface: the shown tab is lit and underlined in
               // citrus (the sidebar's selection). With a pointer, the close
@@ -267,7 +291,8 @@ export function Dock() {
                   <View pointerEvents="none" class="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-brand" />
                 </If>
               </View>
-            )}
+              );
+            }}
             renderDock={(dock) => (
               <View class="h-8 flex-row items-center border-b border-line pl-3 pr-1">
                 <Text class="flex-1 text-[11px] font-semibold uppercase tracking-wider text-faint">
@@ -304,6 +329,7 @@ export function Dock() {
           <Status>{describeDock("Left", layout().left)}</Status>
           <Status>{describeDock("Bottom", layout().bottom)}</Status>
           <Status>{`Showing docks: ${["left", "bottom"].filter((p) => shown()[p]).map((p) => DOCKS[p]).join(", ") || "none"}`}</Status>
+          <Status>{`Zoomed: ${zoomed() === null ? "none" : title(zoomed()!)}`}</Status>
           <Status>{`Last event: ${last()}`}</Status>
         </View>
       </View>

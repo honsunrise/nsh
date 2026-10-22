@@ -108,6 +108,26 @@ describe("on a desktop", () => {
     await app.wait(300);
     expect(app.shows("Center: row([main.rs] [Preview])")).toBe(true);
   });
+
+  test("the toolbar's option shows or hides every tab's close button", async () => {
+    expect(app.shows("label:Close README.md")).toBe(true);
+    await app.press("label:Show close buttons");
+    await app.waitFor("label:Close README.md", { state: "gone" });
+    expect(app.shows("label:Close Preview")).toBe(false);
+    await app.press("label:Show close buttons");
+    await app.waitFor("label:Close README.md");
+  });
+
+  test("the toolbar zooms the group of the tab shown last, and back", async () => {
+    await app.press("id:tab-readme");
+    await app.waitFor("Last event: Showing README.md");
+    await app.press("label:Zoom the group");
+    await app.waitFor("Zoomed: README.md");
+    await app.waitFor("Live preview", { state: "gone" });
+    await app.press("label:Zoom the group");
+    await app.waitFor("Zoomed: none");
+    await app.waitFor("Live preview");
+  });
 });
 
 describe("on a phone", () => {
