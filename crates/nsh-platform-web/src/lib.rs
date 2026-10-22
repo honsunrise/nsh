@@ -1291,9 +1291,13 @@ fn key_of(code: u32) -> Option<Key> {
 /// an auto-repeat. Returns the binding that fires, -1 for none (the key
 /// goes on) or -2 for a held key's repeat (consumed, nothing fires). JS
 /// reports a firing binding with [`nsh_key_command`].
+///
+/// `f64` keeps every `u32` binding ID positive in JS, including Rust
+/// shortcuts (`1 << 31` and up) and overlay Escape (`u32::MAX`), while
+/// leaving the negative sentinels distinct.
 #[unsafe(no_mangle)]
-pub extern "C" fn nsh_key(key: u32, modifiers: u32, editing: u32, repeat: u32) -> i32 {
-    let Some(key) = key_of(key) else { return -1 };
+pub extern "C" fn nsh_key(key: u32, modifiers: u32, editing: u32, repeat: u32) -> f64 {
+    let Some(key) = key_of(key) else { return -1.0 };
     let keystroke = Keystroke {
         modifiers: Modifiers {
             ctrl: modifiers & 1 != 0,
@@ -1309,9 +1313,9 @@ pub extern "C" fn nsh_key(key: u32, modifiers: u32, editing: u32, repeat: u32) -
         })
     });
     match found {
-        KeyMatch::None => -1,
-        KeyMatch::Held => -2,
-        KeyMatch::Fire(id) => id as i32,
+        KeyMatch::None => -1.0,
+        KeyMatch::Held => -2.0,
+        KeyMatch::Fire(id) => id as f64,
     }
 }
 
