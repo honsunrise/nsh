@@ -193,7 +193,7 @@ A tab dragged over a group shows where it would land, and the drop puts it there
 While a drag hovers, the area shows the drop indicator over the part of the group the panel would take (all of its
 content to join, half of it to split): a part the
 app styles (`dropIndicatorClass`), with content of its own if the app renders some (`renderDropIndicator`, told the
-`group`, the `side` it splits off or the tab bar `index`). What follows the pointer or finger is the app's too
+`group`, the `side` it splits off or the tab bar `index`). It moves to each new place natively, easing there and fading in on another group as the last one fades out (at once when the user asks for less motion). What follows the pointer or finger is the app's too
 (`renderDragPreview`). A drop is one change of the layout, reported once; a drop that would change nothing changes nothing.
 
 A locked area, a zoomed one, and a group's last panel when nothing sits beside the group drag nothing.

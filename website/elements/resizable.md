@@ -113,7 +113,10 @@ with `handleClass` / `handleStyle`: 1 point across and the boundary's full lengt
 either axis, and `w-[3px]` or `h-[3px]` thickens it, and its `group-hover:` and `group-active:` classes follow
 the pointer over the band and the press or drag. For more than a line (a grip of dots, an icon), `renderHandle` renders
 the indicator's content, told the handle's `index`, `axis` and `state`; it is drawn again when the state changes, a
-few times per drag, never on every move.
+few times per drag, never on every move. A grip that animates is the handle's thumb (`handleThumbClass` /
+`handleThumbStyle`): one view centered on the line, drawn upright and turned a quarter on a horizontal line so one class
+serves both axes, which `group-hover:` and `group-active:` classes show and transition; the handle stays pressed for
+the whole drag, wherever the pointer goes.
 
 ```tsx
 <ResizablePanelGroup
