@@ -187,7 +187,8 @@ fn drawer(a: AreaCx, placement: DockPlacement) -> AnyElement {
             let motion = SheetMotion::new(
                 move || info.with(|i| i.as_ref().is_some_and(|i| i.open)),
                 move || side,
-            );
+            )
+            .keeping_panel();
             let close = move || {
                 a.set_dock_open(placement, false);
             };

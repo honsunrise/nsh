@@ -125,6 +125,8 @@ pub(crate) struct SheetMotion {
     panel: Stored<Option<Size<Points>>>,
     /// Going: it leaves the view once its motion's time is over.
     closing: Stored<bool>,
+    /// The panel stays mounted while closed ([`Self::keeping_panel`]).
+    kept: Stored<bool>,
 }
 
 impl SheetMotion {
@@ -143,6 +145,7 @@ impl SheetMotion {
             entering: stored(false),
             panel: stored(None),
             closing: stored(false),
+            kept: stored(false),
         };
         effect(move || {
             let open = open();
@@ -150,6 +153,15 @@ impl SheetMotion {
             untracked(|| motion.follow(open, side));
         });
         motion
+    }
+
+    /// For a panel that stays mounted while closed (a dock's drawer, which
+    /// keeps its panels' state): it keeps its frame, so no layout comes
+    /// to say its size when it opens again, and it comes in from as far
+    /// as it was last laid out.
+    pub(crate) fn keeping_panel(self) -> Self {
+        self.kept.replace(true);
+        self
     }
 
     fn follow(self, open: bool, side: Placement) {
@@ -163,13 +175,22 @@ impl SheetMotion {
             if self.shown.get_untracked() {
                 return;
             }
+            self.fade.set(0.0);
+            self.shown.set(true);
+            // A kept panel laid out before says its size no more.
+            let known = self.kept.get().then(|| self.panel.with(|p| *p)).flatten();
+            if let Some(size) = known {
+                let (x, y) = away(side, size);
+                self.x.set(x);
+                self.y.set(y);
+                self.come_in();
+                return;
+            }
             // Out of sight until the panel is laid out: as far as the window.
             let (x, y) = away(side, window());
             self.x.set(x);
             self.y.set(y);
-            self.fade.set(0.0);
             self.entering.replace(true);
-            self.shown.set(true);
         } else if self.shown.get_untracked() && !self.closing.with(|c| *c) {
             self.entering.replace(false);
             if reduce_motion() {
