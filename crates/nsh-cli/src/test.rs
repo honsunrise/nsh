@@ -374,7 +374,7 @@ fn build_for_runner(entry: &Path, kind: Entry, work_dir: &Path, n: usize) -> Rep
         })
     })();
     built.unwrap_or_else(|e| Reply::Failed {
-        message: format!("{e:#}"),
+        message: crate::ui::with_details(&e),
     })
 }
 
@@ -554,7 +554,8 @@ fn compiler() -> nsh_testing::Compile {
     Arc::new(move |entry: &Path, kind: Entry| {
         let (bytecode, map) = match kind {
             Entry::App => {
-                let entry = crate::entry::resolve(entry).map_err(|e| format!("{e:#}"))?;
+                let entry =
+                    crate::entry::resolve(entry).map_err(|e| crate::ui::with_details(&e))?;
                 let cached = built
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -564,7 +565,7 @@ fn compiler() -> nsh_testing::Compile {
                     Some(built) => built,
                     None => {
                         let out = bytecode_of(&entry, &crate::ui_sets(), true)
-                            .map_err(|e| format!("{e:#}"))?;
+                            .map_err(|e| crate::ui::with_details(&e))?;
                         built
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
@@ -573,7 +574,9 @@ fn compiler() -> nsh_testing::Compile {
                     }
                 }
             }
-            Entry::TestFile => test_file_bytecode(entry).map_err(|e| format!("{e:#}"))?,
+            Entry::TestFile => {
+                test_file_bytecode(entry).map_err(|e| crate::ui::with_details(&e))?
+            }
         };
         // SAFETY: compiled just now by this runtime.
         Ok(Built::Js(
