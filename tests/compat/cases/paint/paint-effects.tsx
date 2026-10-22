@@ -58,6 +58,9 @@ function App() {
       <View testID="no-filter" style={{ height: 4, filter: "none" }} />
       <View testID="backdrop" style={{ height: 4, backdropFilter: "blur(10px)" }} />
       <View testID="backdrops" style={{ height: 4, backdropFilter: "saturate(180%) blur(20px)" }} />
+      <View testID="material" style={{ height: 4, backdropFilter: "blur(30px)", backdropMaterial: "regular" }} />
+      <View testID="material-chrome" style={{ height: 4, backdropFilter: "blur(10px)", backdropMaterial: "chrome" }} />
+      <View testID="no-material" style={{ height: 4, backdropFilter: "blur(10px)", backdropMaterial: "ultraThin" }} />
       {BLENDS.map((mode) => (
         <View testID={`blend-${mode}`} style={{ height: 2, mixBlendMode: mode }} />
       ))}

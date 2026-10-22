@@ -8,8 +8,8 @@
 //! covering it, and work with transparent backgrounds.
 
 use nsh_core::{
-    BorderStyle, BoxShadow, Color, CornerRadii, Filter, Gradient, GradientKind, GradientSize,
-    ViewStyle,
+    BackdropMaterial, BorderStyle, BoxShadow, Color, CornerRadii, Filter, Gradient, GradientKind,
+    GradientSize, ViewStyle,
     geometry::{Points, px},
 };
 use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
@@ -49,12 +49,20 @@ pub(crate) struct Visual {
     backdrop: Option<Backdrop>,
 }
 
+/// What a backdrop draws: the blur's radius, which material draws it, and
+/// whether that material takes the dark variant.
+#[derive(Clone, Copy, PartialEq)]
+struct BackdropSpec {
+    radius: f32,
+    material: BackdropMaterial,
+    dark: bool,
+}
+
 struct Backdrop {
     view: Retained<UIVisualEffectView>,
     /// Holds the blur at a fraction of the material's strength.
     animator: Retained<UIViewPropertyAnimator>,
-    radius: f32,
-    dark: bool,
+    spec: BackdropSpec,
 }
 
 impl Drop for Backdrop {
@@ -62,6 +70,22 @@ impl Drop for Backdrop {
         // A paused animator must be stopped before it is released.
         self.animator.stopAnimation(true);
         self.view.removeFromSuperview();
+    }
+}
+
+/// The `UIBlurEffectStyle` of a material, in the light or dark variant.
+fn blur_style(material: BackdropMaterial, dark: bool) -> UIBlurEffectStyle {
+    match (material, dark) {
+        (BackdropMaterial::UltraThin, false) => UIBlurEffectStyle::SystemUltraThinMaterialLight,
+        (BackdropMaterial::UltraThin, true) => UIBlurEffectStyle::SystemUltraThinMaterialDark,
+        (BackdropMaterial::Thin, false) => UIBlurEffectStyle::SystemThinMaterialLight,
+        (BackdropMaterial::Thin, true) => UIBlurEffectStyle::SystemThinMaterialDark,
+        (BackdropMaterial::Regular, false) => UIBlurEffectStyle::SystemMaterialLight,
+        (BackdropMaterial::Regular, true) => UIBlurEffectStyle::SystemMaterialDark,
+        (BackdropMaterial::Thick, false) => UIBlurEffectStyle::SystemThickMaterialLight,
+        (BackdropMaterial::Thick, true) => UIBlurEffectStyle::SystemThickMaterialDark,
+        (BackdropMaterial::Chrome, false) => UIBlurEffectStyle::SystemChromeMaterialLight,
+        (BackdropMaterial::Chrome, true) => UIBlurEffectStyle::SystemChromeMaterialDark,
     }
 }
 
@@ -166,7 +190,12 @@ impl Visual {
         // blurs; the background color tints): light unless it is dark.
         let (r, g, b, a) = style.background_color.to_f64();
         let dark = a > 0.0 && 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5;
-        self.set_backdrop(view, blur, dark, local, radii, mtm);
+        let spec = BackdropSpec {
+            radius: blur,
+            material: style.backdrop_material,
+            dark,
+        };
+        self.set_backdrop(view, spec, local, radii, mtm);
     }
 
     fn set_shadows(
@@ -390,37 +419,29 @@ impl Visual {
     }
 
     /// `backdrop-filter: blur()`: a system blur behind the content, its
-    /// strength set by holding a property animator at a fraction.
+    /// material from `backdropMaterial` and its strength set by holding a
+    /// property animator at a fraction.
     fn set_backdrop(
         &mut self,
         view: &UIView,
-        radius: f32,
-        dark: bool,
+        spec: BackdropSpec,
         local: CGRect,
         radii: CornerRadii,
         mtm: MainThreadMarker,
     ) {
-        if radius <= 0.0 {
+        if spec.radius <= 0.0 {
             self.backdrop = None;
             return;
         }
-        if self
-            .backdrop
-            .as_ref()
-            .is_none_or(|b| b.radius != radius || b.dark != dark)
-        {
+        if self.backdrop.as_ref().is_none_or(|b| b.spec != spec) {
             self.backdrop = None;
             let effect_view =
                 UIVisualEffectView::initWithEffect(UIVisualEffectView::alloc(mtm), None);
             effect_view.setUserInteractionEnabled(false);
             let target = effect_view.clone();
-            let material = if dark {
-                UIBlurEffectStyle::SystemUltraThinMaterialDark
-            } else {
-                UIBlurEffectStyle::SystemUltraThinMaterialLight
-            };
+            let style = blur_style(spec.material, spec.dark);
             let block = block2::RcBlock::new(move || {
-                let blur = UIBlurEffect::effectWithStyle(material, mtm);
+                let blur = UIBlurEffect::effectWithStyle(style, mtm);
                 target.setEffect(Some(&blur));
             });
             let animator = UIViewPropertyAnimator::initWithDuration_curve_animations(
@@ -431,13 +452,12 @@ impl Visual {
             );
             animator.setPausesOnCompletion(true);
             // The material blurs by about 30 points at full strength.
-            animator.setFractionComplete((radius / 30.0).clamp(0.05, 1.0) as CGFloat);
+            animator.setFractionComplete((spec.radius / 30.0).clamp(0.05, 1.0) as CGFloat);
             view.insertSubview_atIndex(&effect_view, 0);
             self.backdrop = Some(Backdrop {
                 view: effect_view,
                 animator,
-                radius,
-                dark,
+                spec,
             });
         }
         if let Some(b) = &self.backdrop {
