@@ -121,9 +121,17 @@ nostyle id:filters backdropFilter
 style id:backdrop backdropFilter blur(10)
 style id:backdrops backdropFilter saturate(1.8) blur(20)
 nostyle id:backdrops filter
-style id:material backdropMaterial regular
-style id:material-chrome backdropMaterial chrome
-nostyle id:no-material backdropMaterial
+prop id:material ios.backdropMaterial regular
+prop id:material-chrome ios.backdropMaterial chrome
+prop id:no-material ios.backdropMaterial ultraThin
+prop id:material-thin ios.backdropMaterial thin
+prop id:material-thick ios.backdropMaterial thick
+prop id:material-change ios.backdropMaterial regular
+tap id:material-change
+prop id:material-change ios.backdropMaterial chrome
+tap id:material-change
+prop id:material-change ios.backdropMaterial ultraThin
+style id:material-change backdropFilter blur(30)
 style id:blend-normal mixBlendMode normal
 style id:blend-multiply mixBlendMode multiply
 style id:blend-screen mixBlendMode screen
@@ -145,7 +153,7 @@ style id:blend-plus-lighter mixBlendMode plus-lighter
 covers [styles] backgroundImage
 covers [styles] filter
 covers [styles] backdropFilter
-covers [styles] backdropMaterial
+covers [props] ios.backdropMaterial
 covers [styles] mixBlendMode
 # paint-misc
 tap id:case-paint-misc

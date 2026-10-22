@@ -1698,6 +1698,9 @@ pub enum Prop {
     /// `elevation` (Android): the material shadow (points), from the view's shape.
     #[prop(android = "elevation")]
     Elevation(Points),
+    /// The system material of a backdrop blur (iOS, default `ultraThin`).
+    #[prop(ios = "backdropMaterial")]
+    BackdropMaterial(crate::BackdropMaterial),
     /// An accessibility property.
     #[prop(nested)]
     Accessibility(AccessibilityProp),

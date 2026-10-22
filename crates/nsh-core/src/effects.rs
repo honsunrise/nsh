@@ -426,7 +426,7 @@ pub fn blur_radius(filters: &[Filter]) -> Points {
         .sum()
 }
 
-/// `backdropMaterial`: which system material a `backdropFilter` blur draws.
+/// `ios={{ backdropMaterial }}`: the system material a `backdropFilter` blur draws.
 ///
 /// iOS blurs a backdrop with a material rather than a plain Gaussian blur:
 /// each one blurs and tints by a fixed amount, and the thicker it is, the
@@ -438,8 +438,8 @@ pub fn blur_radius(filters: &[Filter]) -> Points {
 /// so the names follow Apple's `UIBlurEffectStyle.system*Material`.
 ///
 /// Read on iOS, where it picks the material; the blur's radius still sets
-/// how strongly it is applied. Other platforms blur as before.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// how strongly it is applied, as an approximation rather than a Gaussian radius.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::ui::PropEnum)]
 pub enum BackdropMaterial {
     /// The thinnest material, the most of what is behind coming through.
     #[default]
@@ -455,7 +455,7 @@ pub enum BackdropMaterial {
 }
 
 impl BackdropMaterial {
-    /// The style name ([`BackdropMaterial::parse`]'s input).
+    /// The iOS prop name ([`BackdropMaterial::parse`]'s input).
     pub fn name(self) -> &'static str {
         match self {
             BackdropMaterial::UltraThin => "ultraThin",

@@ -292,6 +292,21 @@ view()
 | `backdropFilter` | 系统模糊材质，近似给定半径 | Android 12（API 31）起支持 |
 | `mixBlendMode` | 支持 | Android 10（API 29）起支持 |
 
+在 iOS 上，`ios={{ backdropMaterial: "regular" }}` 选择 `backdropFilter` 模糊所使用的系统材质。
+可选值为 `"ultraThin"`（默认）、`"thin"`、`"regular"`、`"thick"` 和 `"chrome"`。
+与正数模糊半径配合使用即可显示材质。Rust 使用 `.backdrop_material(BackdropMaterial::Regular)`
+与 `.backdrop_blur(px(30.0))`。半径用于近似控制材质强度：NSH 按比例应用所选材质，
+在 30 点达到完整强度。浅色或深色变体由视图的背景色决定。
+这些选项对应 Apple 的[系统模糊材质](https://developer.apple.com/documentation/uikit/uiblureffect/style/systemmaterial)。
+
+```rust tabs
+view().backdrop_blur(px(30.0)).backdrop_material(BackdropMaterial::Regular)
+```
+
+```tsx tabs
+<View ios={{ backdropMaterial: "regular" }} style={{ height: 64, backdropFilter: "blur(30px)" }} />
+```
+
 ## 轮廓线、不透明度与可见性
 
 - `outlineWidth`、`outlineColor`、`outlineStyle`、`outlineOffset`（`.outline(..)`、`.outline_color(..)`、`.outline_dashed()`、`.outline_offset(..)`）：边框之外、不占空间的一条线（负偏移会画在内侧）。与 CSS 一样，`outlineStyle: "none"`（或 `"hidden"`，`.outline_none()`）会隐藏轮廓，无论宽度是多少。

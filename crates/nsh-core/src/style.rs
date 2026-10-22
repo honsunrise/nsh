@@ -501,7 +501,7 @@ pub struct ViewStyle {
     pub effects: Option<Arc<Effects>>,
     /// `mixBlendMode`.
     pub blend_mode: BlendMode,
-    /// `backdropMaterial`.
+    /// The iOS material from `ios={{ backdropMaterial }}`, projected at mount time.
     pub backdrop_material: BackdropMaterial,
     /// `outline*`.
     pub outline: Outline,
@@ -1179,7 +1179,6 @@ style_keys! {
     BackgroundImage = "backgroundImage": View "string" "CSS gradients drawn over the background color: `linear-gradient(...)`, `radial-gradient(...)`, `conic-gradient(...)`, several separated by commas.",
     Filter = "filter": View "string" "CSS filters of the view and its content: `brightness()`, `contrast()`, `grayscale()`, `hue-rotate()`, `invert()`, `saturate()`, `sepia()`, `opacity()`, `blur()`, `drop-shadow()`.",
     BackdropFilter = "backdropFilter": View "string" "CSS filters of what is behind the view (`blur(10px)`).",
-    BackdropMaterial = "backdropMaterial": View "\"ultraThin\" | \"thin\" | \"regular\" | \"thick\" | \"chrome\"" "Which system material a `backdropFilter` blur draws on iOS, thinnest by default; the blur's radius still sets how strongly it applies. Other platforms blur as before.",
     MixBlendMode = "mixBlendMode": View "\"normal\" | \"multiply\" | \"screen\" | \"overlay\" | \"darken\" | \"lighten\" | \"color-dodge\" | \"color-burn\" | \"hard-light\" | \"soft-light\" | \"difference\" | \"exclusion\" | \"hue\" | \"saturation\" | \"color\" | \"luminosity\" | \"plus-darker\" | \"plus-lighter\"" "How the view blends with what is behind it.",
     OutlineWidth = "outlineWidth": View "number" "A line outside the border that takes no space.",
     OutlineColor = "outlineColor": View "ColorValue",
@@ -2309,12 +2308,6 @@ impl Style {
                 };
                 self.edit_effects(|e| e.backdrop_filters = list);
             }
-            StyleKey::BackdropMaterial => {
-                self.view.backdrop_material = match keyword(value)? {
-                    None => BackdropMaterial::UltraThin,
-                    Some(s) => BackdropMaterial::parse(s).ok_or(StyleError::InvalidValue)?,
-                }
-            }
             StyleKey::MixBlendMode => {
                 self.view.blend_mode = match keyword(value)? {
                     None => BlendMode::Normal,
@@ -2900,29 +2893,6 @@ mod tests {
         );
         assert_eq!(
             s.set("fontStyle", StyleValue::Str("oblique")),
-            Err(StyleError::InvalidValue)
-        );
-    }
-
-    #[test]
-    fn backdrop_material_parses() {
-        let mut s = Style::default();
-        assert_eq!(s.view.backdrop_material, BackdropMaterial::UltraThin);
-        s.set("backdropMaterial", StyleValue::Str("regular"))
-            .unwrap();
-        assert_eq!(s.view.backdrop_material, BackdropMaterial::Regular);
-        s.set("backdropMaterial", StyleValue::Str("chrome"))
-            .unwrap();
-        assert_eq!(s.view.backdrop_material, BackdropMaterial::Chrome);
-        // The null of a style that was taken off goes back to the default.
-        s.set("backdropMaterial", StyleValue::Null).unwrap();
-        assert_eq!(s.view.backdrop_material, BackdropMaterial::UltraThin);
-        assert_eq!(
-            s.set("backdropMaterial", StyleValue::Str("frosted")),
-            Err(StyleError::InvalidValue)
-        );
-        assert_eq!(
-            s.set("backdropMaterial", StyleValue::Number(1.0)),
             Err(StyleError::InvalidValue)
         );
     }
