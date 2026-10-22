@@ -55,7 +55,8 @@
 //! resolves the target from them (the tab strip inserts at the slot under
 //! the pointer, a content frame merges in its middle and splits at its
 //! edges: [`super::DropPlaceholderBounds`], `split_placement_at`), shows
-//! the drop indicator part in that group, and the release applies one
+//! the drop indicator part over that group (an overlay above the area, so
+//! the handles' lines never cover it), and the release applies one
 //! move. A locked area, a zoomed one, and a group's last panel when
 //! nothing sits beside the group drag nothing.
 //!
@@ -524,6 +525,7 @@ pub fn DockArea(props: DockAreaProps, cx: Scope<DockAreaEvent>) -> impl IntoElem
             )
             .otherwise(move || regular_view(a)),
         )
+        .child(super::tab_group::drop_indicator(a))
         .child(drag_preview(a))
 }
 

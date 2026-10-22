@@ -83,8 +83,8 @@ The other parts the app draws are render props as well (`renderTab` and `renderD
 `renderDropIndicator` with a `DockDropIndicator`, `renderDock` with a `DockInfo`, `renderEmpty`), and every part
 takes `<part>Class` / `<part>Style` (group, tab bar, tab, content, drop indicator, handle, handle thumb, dock, and
 compact's drawer, sheet and backdrop). The drop indicator moves natively: when its target changes the area asks for a
-layout animation of that commit (`tab_group.rs` `animate_indicator`: the indicator eases to its new place, fades in on
-another group while the old one fades out; nothing with reduced motion), and the drag preview follows the pointer by
+layout animation of that commit (`tab_group.rs` `animate_indicator`: the indicator eases to its new place, within a
+group or across groups, and fades in as it appears and out as it goes; nothing with reduced motion), and the drag preview follows the pointer by
 a transform, so nothing else in such a commit changes its frame. The area wraps what the app renders with the behavior: a tab's press selects it, its drag moves
 it, a handle's drag resizes. The app draws every pixel; the area draws none.
 
@@ -99,8 +99,10 @@ desktop does. The grant starts the drag: every group's tab bar, tabs and content
 view's coordinates in one task, answered with the next commit. Each move resolves the target from those bounds: over
 a tab bar, the slot between the tabs the pointer is past (counted without the dragged tab); over a content frame, its
 middle merges and its outer 35% on each side splits (`split_placement_at`), except back onto its own group when that would change
-nothing. The target group shows the drop indicator part over what the panel would take
-(`DropPlaceholderBounds::for_placement`), and the release applies one move (`PaneTree::move_panel` within a tree,
+nothing. The drop indicator part covers what the panel would take in the target group
+(`DropPlaceholderBounds::for_placement`): it is one overlay in the root view, placed with the content frame the drag
+measured, so it draws above the handles, whose lines lie over the edges of the groups beside them, and no frame clips
+it, and the release applies one move (`PaneTree::move_panel` within a tree,
 detach and insert across trees) and one `onLayoutChange`. A gesture the system takes away drops nothing.
 
 The rules of what may move are `Area::groups`', as `gpui-base`'s: a locked or zoomed area rearranges nothing, and a

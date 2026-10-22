@@ -1,7 +1,7 @@
 //! A `DockArea`'s tab groups (`gpui-base`'s `TabGroup`): the tab bar, the
 //! tabs the area wraps around the app's `renderTab`, the content frame
-//! where every panel of the group is placed and the displayed one shown,
-//! and the drop indicator; and the drag of a tab, which runs in the core.
+//! where every panel of the group is placed and the displayed one shown;
+//! the drop indicator; and the drag of a tab, which runs in the core.
 //!
 //! # A drag
 //!
@@ -22,8 +22,8 @@
 //! [`super::PaneTree::move_panel`] puts it after taking it out); over a
 //! content frame, its middle merges and its edges split
 //! (`split_placement_at`), except back onto its own group when that would
-//! change nothing. The group the target names shows the drop indicator
-//! part over what the panel would take
+//! change nothing. The drop indicator part, an overlay above the area,
+//! covers what the panel would take in the group the target names
 //! ([`super::DropPlaceholderBounds::for_placement`]). The release applies
 //! one move ([`AreaCx::drop_at`]); a gesture the system takes away drops
 //! nothing.
@@ -100,13 +100,6 @@ pub(crate) fn tab_group(a: AreaCx, node: NodeId) -> AnyElement {
         tabs: Rc::default(),
     };
     a.register(refs.clone());
-    let indicator = computed(move || {
-        a.drag.with(|drag| {
-            drag.as_ref()
-                .and_then(|d| d.target)
-                .filter(|target| target.group == node)
-        })
-    });
     let tab_refs = refs.tabs.clone();
     let content = refs.content.expect("a group's content");
     view()
@@ -152,8 +145,7 @@ pub(crate) fn tab_group(a: AreaCx, node: NodeId) -> AnyElement {
                         let me = id.clone();
                         panel_slot(a, id, move || shown.with(|s| s.as_ref() == Some(&me)))
                     },
-                ))
-                .child(drop_indicator(a, node, indicator)),
+                )),
         )
         .into_element()
 }
@@ -179,14 +171,14 @@ pub(crate) fn panel_slot(a: AreaCx, id: PanelId, shown: impl Fn() -> bool + 'sta
 }
 
 /// How long the drop indicator takes to move to another place or to fade
-/// in or out (another group's), in milliseconds.
+/// in or out, in milliseconds.
 const INDICATOR_MOTION_MS: f32 = 160.0;
 
 /// Animates the next commit's layout changes for the drop indicator: its
-/// frame eases to the new place and indicators fade in and out. During a
-/// drag nothing else changes its frame there (the drag preview moves by a
-/// transform), so only the indicator moves. Nothing when the user asked
-/// for less motion.
+/// frame eases to the new place, and it fades in as it appears and out as
+/// it goes. During a drag nothing else changes its frame there (the drag
+/// preview moves by a transform), so only the indicator moves. Nothing
+/// when the user asked for less motion.
 fn animate_indicator(fade: bool) {
     if untracked(reduce_motion) {
         return;
@@ -199,18 +191,31 @@ fn animate_indicator(fade: bool) {
     });
 }
 
-/// The drop indicator of group `node`: while a drag would land on it,
-/// over the part of its content frame the panel would take (all of it to
-/// merge, a half to split). It moves between those places, and fades in
-/// as it comes to another group (where the other group's fades out).
-fn drop_indicator(a: AreaCx, node: NodeId, indicator: Memo<Option<DropAt>>) -> AnyElement {
+/// The drop indicator: while a drag would land on a group, over the part
+/// of its content frame the panel would take (all of it to merge, a half
+/// to split). It is an overlay in the root view, placed with the frame
+/// the drag measured, so it is drawn above everything in the area: the
+/// handles' lines, which lie over the edges of the groups beside them,
+/// never cover its edges, and no frame clips it. It moves from place to
+/// place, across groups too. The compact presentation has none.
+pub(crate) fn drop_indicator(a: AreaCx) -> AnyElement {
+    let target = computed(move || {
+        if a.compact.get() {
+            return None;
+        }
+        a.drag.with(|drag| drag.as_ref().and_then(|d| d.target))
+    });
     when(
-        move || indicator.with(Option::is_some),
+        move || target.with(Option::is_some),
         move || {
             let place = move || {
-                indicator
-                    .get()
-                    .map(|t| DropPlaceholderBounds::for_placement(t.content, t.side))
+                target.get().map(|t| {
+                    let p = DropPlaceholderBounds::for_placement(t.content, t.side);
+                    Bounds {
+                        origin: t.content.origin + p.origin(),
+                        size: p.size(),
+                    }
+                })
             };
             // The first place is where it appears; a later one, where it
             // moves to.
@@ -222,30 +227,30 @@ fn drop_indicator(a: AreaCx, node: NodeId, indicator: Memo<Option<DropAt>>) -> A
                     animate_indicator(before.is_none());
                 }
             });
-            view()
-                .absolute()
+            overlay()
                 .pointer_events(PointerEvents::None)
+                .focusable(false)
                 .style_with(move |s| match place() {
                     Some(p) => s
-                        .left(p.origin().x)
-                        .top(p.origin().y)
-                        .w(p.size().width)
-                        .h(p.size().height),
+                        .left(p.origin.x)
+                        .top(p.origin.y)
+                        .w(p.size.width)
+                        .h(p.size.height),
                     None => s,
                 })
                 .app_class(a.props.drop_indicator_class)
                 .inline_style(a.props.drop_indicator_style)
                 .child(dynamic(move || {
-                    let target = indicator.get()?;
+                    let target = target.get()?;
                     let value = DockDropIndicator {
-                        group: node.as_u64(),
+                        group: target.group.as_u64(),
                         side: target.side,
                         index: target.index,
                     };
                     a.props
                         .render_drop_indicator
                         .get()
-                        .map(|r| r.render(node.as_u64().to_string(), value).flex_1())
+                        .map(|r| r.render(target.group.as_u64().to_string(), value).flex_1())
                 }))
         },
     )
