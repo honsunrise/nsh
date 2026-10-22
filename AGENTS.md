@@ -45,7 +45,7 @@ crates/
                        the standard modules among them (`runtime/fs.rs`: `fs/promises`, `runtime/process.rs`, `runtime/net.rs`,
                        `runtime/websocket.rs`, `runtime/os.rs`) on the `System` their calls get (capabilities, data directory, quotas, per-VM state)
   nsh-base/            `nsh/base`, NSH's `gpui-base`: unstyled base components (behavior, state, focus, accessibility; the look is the
-                       app's): navigation (`NavStack`, `NavPage`), `Dialog`, `AlertDialog`, `Button`, `Checkbox`, `Radio` / `RadioGroup`, `Switch`, `Tab` / `Tabs`, safe areas, the keyboard, the status
+                       app's): navigation (`NavStack`, `NavPage`), `Dialog`, `AlertDialog`, `Button`, `Checkbox`, `Radio` / `RadioGroup`, `Switch`, `Tab` / `Tabs`, `Collapsible`, safe areas, the keyboard, the status
                        bar, `SelectionArea` (texts that select together: `nsh-core`'s `selection.rs`), `TextView` (Markdown / HTML documents: `text_view/`, docs/dev/text-view.md), `ResizablePanelGroup` / `ResizablePanel` (`resizable/`), `DockArea` (a dockable workspace: splits, tab groups and edge docks whose layout is
                        data, `dock/`, docs/dev/dock.md),
                        the popups on the core's overlays (`Popover`, `Menu` / `ContextMenu` / `MenuItem` / `MenuSeparator` / `Submenu`,
@@ -449,6 +449,10 @@ It runs on every pull request: its `check` job is the status check main requires
 reports `check` for (one touching only `crates/gpui`) can still merge. The Compat workflow's `compat` job is required
 too, so it also runs on every pull request, and its `dorny/paths-filter` step (held to the graph by `paths.py` the same
 way) decides whether it builds and checks or passes at once.
+Every pull-request workflow also handles `merge_group: checks_requested`, so GitHub's merge queue tests the
+combined commit. Queue runs execute the full workflow without PR path filters; Compat always builds on a queue
+run. Website deployment runs only on pushes and manual dispatches. `.github/ci/paths.py` checks the queue
+trigger alongside the dependency paths.
 CI builds without incremental state or debug info, caches dependencies only (`Swatinem/rust-cache`, saved by `main`,
 restored by pull requests) and ignores the toolchain file's mobile targets (`RUSTUP_TOOLCHAIN=stable`) except in the
 release. Files a crate reads from outside its directory (`include_bytes!`, test fixtures) go into its workflows'
@@ -459,6 +463,24 @@ release. Files a crate reads from outside its directory (`include_bytes!`, test 
 Subagents and teammates never run `cargo build`, `cargo test`, `cargo clippy`, `cargo xtask` or `nsh test` (several
 at once overload the machine); at most an occasional `cargo check -p <crate>` for compile errors. They write the
 code and its tests and report which tests to run; the main session runs builds and tests itself, one at a time.
+
+## Review and parallel workspaces
+
+For PR reviews and work involving multiple agents, **consider LayerFS before creating a Git worktree**. When
+isolated workspaces are needed and the workload fits the available Linux environment, prefer separate LayerFS
+branches and mounted Workspaces from the same committed input. Give each agent its own Workspace; reuse a warm
+snapshot only when its OS, architecture, toolchain and dependencies match the task.
+
+Reuse an existing prepared LayerFS deployment first. Start with `./scripts/layerfs status` and follow
+`docs/dev/layerfs.md`; use `./scripts/layerfs prepare` when setup is needed. The script's `prepare`, `smoke` and
+`status` commands prepare and validate the deployment. Create agent
+branches and mount Workspaces through the pinned LayerFS SDK described in that guide; a smoke run is a validation
+trial, not an agent's development Workspace. Keep source changes in Git and submit them through pull requests.
+
+Use a Git worktree when a concrete constraint makes LayerFS unsuitable, such as an unavailable Docker/FUSE
+environment or a task requiring native macOS, iOS or Windows tooling. State the reason briefly and proceed without
+an extra approval checkpoint. Read-only reviews that need no isolated workspace can inspect the checkout or Git
+objects directly. Preserve the existing parallel-agent build and test limits whichever workspace mechanism is used.
 
 ## Verification after changes
 

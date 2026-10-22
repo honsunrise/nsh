@@ -729,6 +729,9 @@ impl<M: TextEngine + 'static> Core<M> {
 impl<M: TextEngine> Core<M> {
     fn with_engine(text_engine: M, viewport: Size<Points>) -> Self {
         let mut layout = TaffyTree::with_capacity(256);
+        // The core rounds layouts itself (`rounded`): Taffy's pass walks the
+        // absolutely positioned nodes through lists it can leave stale.
+        layout.disable_rounding();
         let root_layout = layout.new_leaf(root_style(viewport)).expect("taffy root");
         let mut nodes = Slab::with_capacity(256);
         let mut root = Node::new(ROOT_ID, Kind::View);
@@ -2935,8 +2938,6 @@ impl<M: TextEngine> Core<M> {
         }
         if let Some(layout) = layout {
             if self.nodes[parent as usize].list.is_none() && !kind.is_root() {
-                // Before it leaves: a block above may get a fresh node.
-                self.unhoist(parent, layout);
                 let parent_layout = self.nodes[parent as usize]
                     .layout
                     .expect("block parent has layout");
@@ -2953,104 +2954,6 @@ impl<M: TextEngine> Core<M> {
                 self.mount.push(MountItem::Remove { id });
             }
         }
-    }
-
-    /// Taffy keeps the out-of-flow boxes (absolutely placed) a containing
-    /// block laid out last, its "hoisted" children, and visits them again
-    /// each time it rounds the layout, also where it does not lay the block
-    /// out again and so never renews the list: a block in a `display: none`
-    /// subtree, one left with no children. A box that leaves the tree from
-    /// under such a block stays listed, and once its node is freed the next
-    /// layout panics ("invalid SlotMap key"); one still alive is rounded
-    /// against its old block too. So before `layout` (the node of a child of
-    /// `parent`) leaves, each block from `parent` up whose list holds it or
-    /// anything inside it gets a fresh layout node: the same style, context
-    /// and children, an empty list, laid out again. A block that gets one
-    /// may be absolutely placed itself: the blocks above that list its old
-    /// node get one too, so all are found before any is replaced.
-    fn unhoist(&mut self, parent: Key, layout: LayoutId) {
-        let mut renewed: Vec<Key> = Vec::new();
-        let (mut key, mut below) = (parent, layout);
-        while key != NO_KEY {
-            // Up the layout tree only: screens, modals and list cells are
-            // layout roots of their own.
-            let Some(block) = self.nodes[key as usize].layout else {
-                break;
-            };
-            if self.layout.parent(below) != Some(block) {
-                break;
-            }
-            let hoisted = self.layout.hoisted_children(block).expect("taffy node");
-            if hoisted.iter().any(|&boxed| {
-                self.layout_within(boxed, layout, block)
-                    || renewed
-                        .iter()
-                        .any(|&k| self.nodes[k as usize].layout == Some(boxed))
-            }) {
-                renewed.push(key);
-            }
-            below = block;
-            key = self.nodes[key as usize].parent;
-        }
-        // Inner blocks first: each is swapped into its parent's old node.
-        for key in renewed {
-            self.fresh_layout(key);
-        }
-    }
-
-    /// Whether layout node `node`, listed by `block`, is `root` or inside
-    /// it (it is inside `block`, so the walk ends there).
-    fn layout_within(&self, mut node: LayoutId, root: LayoutId, block: LayoutId) -> bool {
-        loop {
-            if node == root {
-                return true;
-            }
-            if node == block {
-                return false;
-            }
-            match self.layout.parent(node) {
-                Some(parent) => node = parent,
-                None => return false,
-            }
-        }
-    }
-
-    /// Gives `key` a fresh layout node in place of its own (see
-    /// [`Self::unhoist`]).
-    fn fresh_layout(&mut self, key: Key) {
-        let Some(old) = self.nodes[key as usize].layout else {
-            return;
-        };
-        let children = self.layout.children(old).expect("taffy children");
-        // Taken off first: removing `old` would orphan them.
-        self.layout.set_children(old, &[]).expect("taffy children");
-        let style = self.layout.style(old).expect("taffy style").clone();
-        let fresh = match self.layout.get_node_context_mut(old) {
-            Some(context) => {
-                let context = std::mem::replace(context, LeafContext::Image(None));
-                self.layout.new_leaf_with_context(style, context)
-            }
-            None => self.layout.new_leaf(style),
-        }
-        .expect("taffy leaf");
-        self.layout
-            .set_children(fresh, &children)
-            .expect("taffy children");
-        if let Some(parent) = self.layout.parent(old) {
-            let index = self
-                .layout
-                .children(parent)
-                .expect("taffy children")
-                .iter()
-                .position(|&c| c == old)
-                .expect("taffy child");
-            self.layout
-                .replace_child_at_index(parent, index, fresh)
-                .expect("taffy replace");
-        }
-        self.layout.remove(old).expect("taffy remove");
-        self.nodes[key as usize].layout = Some(fresh);
-        self.needs_layout = true;
     }
 
     /// A page's or dialog's `statusBar`: changed in place while the node
@@ -3875,7 +3778,7 @@ impl<M: TextEngine> Core<M> {
                 // An attachment, laid out by `update_attachments`.
                 _ => {
                     if let Some(l) = child.layout {
-                        let size = self.layout.layout(l).expect("taffy layout").size;
+                        let size = self.rounded_layout(l).size;
                         alignments.push(
                             out,
                             crate::geometry::size_pt(size.width, size.height),
@@ -4006,6 +3909,39 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// Where the layout of the node around `layout` is in its layout root
+    /// (the sum of the unrounded locations above it), as Taffy's rounding
+    /// carries it down: added from the root down, in Taffy's order, so the
+    /// sum is the same to the last bit of an `f32` (an edge at x.5 rounds
+    /// one way or the other on it).
+    fn layout_origin(&self, layout: LayoutId) -> taffy::Point<f32> {
+        let mut above = Vec::new();
+        let mut at = self.layout.parent(layout);
+        while let Some(node) = at {
+            above.push(node);
+            at = self.layout.parent(node);
+        }
+        above
+            .iter()
+            .rev()
+            .fold(taffy::Point::ZERO, |origin, &node| {
+                let l = self.layout.unrounded_layout(node);
+                taffy::Point {
+                    x: origin.x + l.location.x,
+                    y: origin.y + l.location.y,
+                }
+            })
+    }
+
+    /// `layout`'s layout, rounded to whole points as Taffy's rounding pass
+    /// does ([`rounded`]).
+    fn rounded_layout(&self, layout: LayoutId) -> taffy::Layout {
+        rounded(
+            self.layout.unrounded_layout(layout),
+            self.layout_origin(layout),
+        )
+    }
+
     /// Lays out the main tree if it changed. Returns true if it did.
     fn layout_main(&mut self) -> bool {
         let root = self.nodes[self.root as usize].layout.expect("root layout");
@@ -4013,7 +3949,7 @@ impl<M: TextEngine> Core<M> {
             width: AvailableSpace::Definite(self.viewport.width.0),
             height: AvailableSpace::Definite(self.viewport.height.0),
         };
-        // Even a clean root costs a full rounding walk in taffy: skip it.
+        // A clean root has nothing new to lay out, nor frames to emit.
         let main = self.layout.dirty(root).unwrap_or(true);
         if main {
             self.layout_root(root, available);
@@ -4129,7 +4065,7 @@ impl<M: TextEngine> Core<M> {
         let parent = self.nodes[key as usize].parent;
         let p = self.nodes.get(parent as usize)?;
         let stack_layout = p.layout.filter(|_| p.kind == Kind::Stack)?;
-        let s = self.layout.layout(stack_layout).ok()?.size;
+        let s = self.rounded_layout(stack_layout).size;
         Some(size_pt(s.width, s.height))
     }
 
@@ -4158,8 +4094,7 @@ impl<M: TextEngine> Core<M> {
         self.layout_detached(item);
         self.nodes[item as usize]
             .layout
-            .and_then(|l| self.layout.layout(l).ok())
-            .map_or(0.0, |l| l.size.height)
+            .map_or(0.0, |l| self.rounded_layout(l).size.height)
     }
 
     fn layout_detached(&mut self, key: Key) {
@@ -4338,7 +4273,7 @@ impl<M: TextEngine> Core<M> {
             };
             let state = list.list.as_ref().expect("list");
             let horizontal = state.horizontal;
-            let size = self.layout.layout(list_layout).expect("taffy layout").size;
+            let size = self.rounded_layout(list_layout).size;
             let cross = if horizontal { size.height } else { size.width };
             let item_cross = state.column(cross, 0).1;
             let extra_cross = state.full_width(cross).1;
@@ -4478,9 +4413,13 @@ impl<M: TextEngine> Core<M> {
             if !created {
                 continue;
             }
-            let boxed = self.layout.layout(layout).expect("taffy layout");
-            let mut content = content_box(boxed);
-            let hidden = boxed.size == taffy::Size::ZERO && self.displays_none(key);
+            // Whatever Taffy keeps for it (`emit_frames_in`).
+            let hidden = self.displays_none(key);
+            let mut content = if hidden {
+                Bounds::default()
+            } else {
+                content_box(&self.rounded_layout(layout))
+            };
             let engine = &self.text_engine;
             let cache = &mut self.measure_cache;
             let Some(LeafContext::Text(cx)) = self.layout.get_node_context_mut(layout) else {
@@ -4596,7 +4535,7 @@ impl<M: TextEngine> Core<M> {
             let Some(l) = self.nodes[a as usize].layout else {
                 continue;
             };
-            let size = self.layout.layout(l).expect("taffy layout").size;
+            let size = self.rounded_layout(l).size;
             let (x, y) = match points.get(i).copied().flatten() {
                 Some(p) => (content.origin.x.0 + p.x.0, content.origin.y.0 + p.y.0),
                 // Far away, like unbound list cells.
@@ -4609,12 +4548,57 @@ impl<M: TextEngine> Core<M> {
 
     /// Emits the frame of `key` and its subtree (if changed).
     fn emit_frames(&mut self, key: Key) {
+        let parent = self.nodes[key as usize].parent;
+        let hidden = parent != NO_KEY && self.displays_none(parent);
+        let origin = self.nodes[key as usize]
+            .layout
+            .map_or(taffy::Point::ZERO, |l| self.layout_origin(l));
+        self.emit_frames_in(key, hidden, origin);
+    }
+
+    /// [`Core::emit_frames`] of `key`, `hidden` when a view around it is
+    /// `display: none`. A view in such a subtree has no frame whatever
+    /// Taffy keeps for it: Taffy can leave a node moved into a hidden
+    /// subtree with its former layout (its dirty marking stops at the
+    /// first node whose cache is empty, which hidden nodes' always are),
+    /// and never rounds the absolutely positioned ones there (they are
+    /// rounded through their containing block, which hidden layout does
+    /// not record), so their native views would keep showing at their
+    /// former size in a parent of no size.
+    ///
+    /// `origin` is where the layout of the view around it is in its layout
+    /// root, unrounded ([`Core::layout_origin`]), carried down the walk.
+    fn emit_frames_in(&mut self, key: Key, hidden: bool, origin: taffy::Point<f32>) {
         let node = &self.nodes[key as usize];
         let Some(layout) = node.layout else { return };
         if !node.created {
             return;
         }
-        let l = self.layout.layout(layout).expect("taffy layout");
+        let hidden = hidden
+            || self
+                .layout
+                .style(layout)
+                .is_ok_and(|s| s.display == taffy::Display::None);
+        if hidden {
+            self.set_frame(key, Bounds::default());
+            if self.nodes[key as usize].kind.is_container() {
+                let children = std::mem::take(&mut self.nodes[key as usize].children);
+                for &child in &children {
+                    if !self.nodes[child as usize].kind.is_root() {
+                        self.emit_frames_in(child, true, origin);
+                    }
+                }
+                self.nodes[key as usize].children = children;
+            }
+            return;
+        }
+        let node = &self.nodes[key as usize];
+        let unrounded = self.layout.unrounded_layout(layout);
+        let inner = taffy::Point {
+            x: origin.x + unrounded.location.x,
+            y: origin.y + unrounded.location.y,
+        };
+        let l = rounded(unrounded, origin);
         let mut frame = rect(l.location.x, l.location.y, l.size.width, l.size.height);
         // Children of a right-to-left horizontal scroll view: mirrored in
         // its content.
@@ -4635,7 +4619,7 @@ impl<M: TextEngine> Core<M> {
         self.set_frame(key, frame);
         let kind = self.nodes[key as usize].kind;
         if kind == Kind::Input {
-            let content = content_box(self.layout.layout(layout).expect("taffy layout"));
+            let content = content_box(&l);
             let node = &mut self.nodes[key as usize];
             let input = node.input.as_mut().expect("input state");
             if input.content != Some(content) {
@@ -4653,7 +4637,6 @@ impl<M: TextEngine> Core<M> {
             // Scrollable extent: the overflow rectangle is measured from the
             // padding box origin and stops at the children's border boxes, so
             // add the leading border and trailing padding.
-            let l = self.layout.layout(layout).expect("taffy layout");
             let o = l.scrollable_overflow_rect;
             let size = size_pt(
                 l.size.width.max(l.border.left + o.right + l.padding.right),
@@ -4669,7 +4652,7 @@ impl<M: TextEngine> Core<M> {
             let children = std::mem::take(&mut self.nodes[key as usize].children);
             for &child in &children {
                 if !self.nodes[child as usize].kind.is_root() {
-                    self.emit_frames(child);
+                    self.emit_frames_in(child, false, inner);
                 }
             }
             self.nodes[key as usize].children = children;
@@ -4772,10 +4755,7 @@ impl<M: TextEngine> Core<M> {
             }
             let (id, events) = (node.id, node.events);
             let horizontal = list.horizontal;
-            let l = *self
-                .layout
-                .layout(node.layout.expect("list layout"))
-                .expect("taffy layout");
+            let l = self.rounded_layout(node.layout.expect("list layout"));
             let (main, cross) = if horizontal {
                 (l.size.width, l.size.height)
             } else {
@@ -4795,7 +4775,7 @@ impl<M: TextEngine> Core<M> {
             let mut anchor = 0.0;
             for &(index, cell) in &ready {
                 if let Some(cell_layout) = self.nodes.get(cell as usize).and_then(|c| c.layout) {
-                    let size = main_of(self.layout.layout(cell_layout).expect("taffy layout").size);
+                    let size = main_of(self.rounded_layout(cell_layout).size);
                     let list = self.nodes[key as usize].list.as_mut().expect("list");
                     anchor += list.measured(index, size);
                 }
@@ -4807,7 +4787,7 @@ impl<M: TextEngine> Core<M> {
                 if let Some(cell_layout) =
                     self.nodes.get(extra.cell as usize).and_then(|c| c.layout)
                 {
-                    let size = main_of(self.layout.layout(cell_layout).expect("taffy layout").size);
+                    let size = main_of(self.rounded_layout(cell_layout).size);
                     let list = self.nodes[key as usize].list.as_mut().expect("list");
                     anchor += list.measured_extra(kind, size);
                 }
@@ -4987,7 +4967,7 @@ impl<M: TextEngine> Core<M> {
             let mut sticky_cells = Vec::new();
             let place = |this: &mut Self, cell: Key, at: f32, row: f32, (x, width): (f32, f32)| {
                 let cell_layout = this.nodes.get(cell as usize).and_then(|c| c.layout)?;
-                let size = this.layout.layout(cell_layout).expect("taffy layout").size;
+                let size = this.rounded_layout(cell_layout).size;
                 let list = this.nodes[key as usize].list.as_ref().expect("list");
                 let main_at = list.to_content(at, row.max(main_of(size)));
                 let frame = if horizontal {
@@ -5109,6 +5089,48 @@ impl<M: TextEngine> Core<M> {
 const HIDDEN: f32 = 1.0e6;
 
 /// The content box (inside padding and border) of a laid-out node.
+/// Taffy's rounding of a coordinate.
+fn round(value: f32) -> f32 {
+    (value + 0.5).floor()
+}
+
+/// `layout` rounded as Taffy's rounding pass (`taffy::round_layout`) rounds
+/// it, `origin` being the unrounded position of the node around it in its
+/// layout root: edges are rounded where they are in the root, so adjacent
+/// views stay adjacent. The core rounds itself: Taffy's pass reaches the
+/// absolutely positioned nodes through their containing block's list,
+/// which it can leave holding removed nodes (a panic) or never fill (a
+/// hidden subtree's), while here every node is reached through its parent,
+/// its containing block (the core has no `position: static`).
+fn rounded(layout: &taffy::Layout, origin: taffy::Point<f32>) -> taffy::Layout {
+    let mut out = *layout;
+    let (x, y) = (origin.x + layout.location.x, origin.y + layout.location.y);
+    out.location.x = round(x) - round(origin.x);
+    out.location.y = round(y) - round(origin.y);
+    out.size.width = round(x + layout.size.width) - round(x);
+    out.size.height = round(y + layout.size.height) - round(y);
+    out.scrollbar_size.width = round(layout.scrollbar_size.width);
+    out.scrollbar_size.height = round(layout.scrollbar_size.height);
+    out.border.left = round(x + layout.border.left) - round(x);
+    out.border.right =
+        round(x + layout.size.width) - round(x + layout.size.width - layout.border.right);
+    out.border.top = round(y + layout.border.top) - round(y);
+    out.border.bottom =
+        round(y + layout.size.height) - round(y + layout.size.height - layout.border.bottom);
+    out.padding.left = round(x + layout.padding.left) - round(x);
+    out.padding.right =
+        round(x + layout.size.width) - round(x + layout.size.width - layout.padding.right);
+    out.padding.top = round(y + layout.padding.top) - round(y);
+    out.padding.bottom =
+        round(y + layout.size.height) - round(y + layout.size.height - layout.padding.bottom);
+    let o = layout.scrollable_overflow_rect;
+    out.scrollable_overflow_rect.left = round(x + o.left) - round(x);
+    out.scrollable_overflow_rect.right = round(x + o.right) - round(x);
+    out.scrollable_overflow_rect.top = round(y + o.top) - round(y);
+    out.scrollable_overflow_rect.bottom = round(y + o.bottom) - round(y);
+    out
+}
+
 fn content_box(l: &taffy::Layout) -> Bounds<Points> {
     rect(
         l.padding.left + l.border.left,

@@ -7,6 +7,7 @@ import BaseStatusBar from "./base-status-bar";
 import BaseAlertDialog from "./base-alert-dialog";
 import BaseButton from "./base-button";
 import BaseCheckbox from "./base-checkbox";
+import BaseCollapsible from "./base-collapsible";
 import BaseDialog from "./base-dialog";
 import BaseDialogBackdrop from "./base-dialog-backdrop";
 import BaseDock from "./base-dock";
@@ -40,6 +41,7 @@ const cases: Record<string, () => JSX.Element> = {
   "base-radio": BaseRadio,
   "base-resizable": BaseResizable,
   "base-tabs": BaseTabs,
+  "base-collapsible": BaseCollapsible,
   "base-token": BaseToken,
 };
 const shown = signal("");
