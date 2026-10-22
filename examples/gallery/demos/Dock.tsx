@@ -1,7 +1,9 @@
+import type { JSX } from "nsh";
 import { signal, Text, untracked, View } from "nsh";
 import { Button, DockArea, type DockAreaLayout, type DockAreaRef } from "nsh/base";
 import { platform, windowSize } from "nsh/device";
-import { hint } from "../ui";
+import { Icon } from "../icons";
+import { colors, desktop, finish, handleThumb, hint, IconTile, radius } from "../ui";
 
 // `nsh/base`'s `DockArea` owns the workspace's behavior: tab drags into
 // another group, to a group's edge (a new split) or along a tab bar, all
@@ -9,7 +11,8 @@ import { hint } from "../ui";
 // what may move. The layout is the app's data: the area reports every edit
 // as the whole new layout and the app passes it back. Each panel's content
 // is the app's too, rendered once per key, so it keeps its state wherever
-// the panel moves. The look is the gallery's theme classes.
+// the panel moves. The look is the gallery's: the workspace sits in a card
+// on its inset surface, tabs and docks in the theme's classes.
 
 /** The panels, by key: their titles. */
 const TITLES: Record<string, string> = {
@@ -64,25 +67,51 @@ function firstSlot(node: DockNode): string {
   return size == null ? "auto" : `${Math.round(size)} pt`;
 }
 
-/** An editor: a count of its edits, which survives every move. */
+/** The lines of an editor's file. */
+const SOURCES: Record<string, string[]> = {
+  main: ["use hopper::App;", "", "fn main() {", "    hopper::run(App::default());", "}"],
+  readme: ["# Hopper", "", "A dockable workspace: drag a tab", "to another group or to an edge."],
+};
+
+/** An editor: a count of its edits, which survives every move, over its
+ * file's lines. */
 function Editor(props: { panel: string }) {
   const edits = signal(0);
   return (
-    <View class="flex-1 gap-3 p-4">
+    <View class="flex-1 gap-4 p-4">
       <View class="flex-row items-center gap-3">
         <Button
           onPress={() => edits.set(edits() + 1)}
           accessibilityLabel={`Edit ${title(props.panel)}`}
-          class="rounded-md bg-primary px-3 py-1.5 active:opacity-70"
+          class="h-8 flex-row items-center gap-1.5 rounded-lg px-3 transition active:scale-[0.97]"
+          style={{ backgroundColor: colors.accentFill, ...finish.accent }}
         >
-          <Text class="text-[13px] font-medium text-primary-foreground">Edit</Text>
+          <Icon name="plus" size={14} tint={colors.onAccent} />
+          <Text class="text-[13px] font-semibold" style={{ color: colors.onAccent }}>
+            Edit
+          </Text>
         </Button>
-        <Text class="text-sm text-foreground">{`${title(props.panel)}: ${edits()} ${edits() === 1 ? "edit" : "edits"}`}</Text>
+        <Text class="text-sm tabular-nums text-muted-foreground">{`${title(props.panel)}: ${edits()} ${edits() === 1 ? "edit" : "edits"}`}</Text>
       </View>
-      <Text class="font-mono text-xs text-muted-foreground">{props.panel === "main" ? "fn main() { hopper::run(); }" : "# Hopper, a dockable workspace"}</Text>
+      <View class="gap-1">
+        {(SOURCES[props.panel] ?? []).map((line, i) => (
+          <View class="flex-row gap-4">
+            <Text class="w-4 text-right font-mono text-xs tabular-nums text-faint">{String(i + 1)}</Text>
+            <Text class="flex-1 font-mono text-xs text-code">{line}</Text>
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
+
+/** The files' tree: a folder and its files, then the manifest. */
+const FILES = [
+  { name: "src/", depth: 0, folder: true },
+  { name: "src/app.rs", depth: 1 },
+  { name: "src/lib.rs", depth: 1 },
+  { name: "Cargo.toml", depth: 0 },
+];
 
 /** What a panel shows, by key. */
 function Panel(props: { panel: string }) {
@@ -92,26 +121,58 @@ function Panel(props: { panel: string }) {
       return <Editor panel={props.panel} />;
     case "files":
       return (
-        <View class="flex-1 gap-1 p-3">
-          {["src/", "src/app.rs", "src/lib.rs", "Cargo.toml"].map((line) => (
-            <Text class="font-mono text-xs text-foreground">{line}</Text>
+        <View class="flex-1 gap-0.5 p-2">
+          {FILES.map((file) => (
+            <View class="h-7 flex-row items-center gap-2 rounded-md pr-2 hover:bg-hover" style={{ paddingLeft: 8 + file.depth * 14 }}>
+              <View class="size-1.5 rounded-full" style={{ backgroundColor: file.folder ? colors.accent : colors.faint }} />
+              <Text class="font-mono text-xs text-foreground">{file.name}</Text>
+            </View>
           ))}
         </View>
       );
     case "preview":
       return (
-        <View class="flex-1 items-center justify-center p-4">
-          <Text class="text-sm text-muted-foreground">Live preview</Text>
+        <View class="flex-1 items-center justify-center gap-3 p-4">
+          <IconTile name="spark" tint={colors.accent} />
+          <View class="items-center gap-0.5">
+            <Text class="text-sm font-semibold text-foreground">Live preview</Text>
+            <Text class="text-xs text-muted-foreground">Follows the editor beside it</Text>
+          </View>
         </View>
       );
     default:
       return (
         <View class="flex-1 gap-1 p-3">
           <Text class="font-mono text-xs text-foreground">$ cargo run</Text>
-          <Text class="font-mono text-xs text-muted-foreground">Finished in 1.92s</Text>
+          <Text class="font-mono text-xs text-muted-foreground">   Compiling hopper v0.1.0</Text>
+          <Text class="font-mono text-xs text-brand">Finished in 1.92s</Text>
         </View>
       );
   }
+}
+
+/** A toolbar control in the gallery's look: a raised 32 pt button whose
+ * dot lights while what it toggles is on. */
+function Tool(props: { label: string; name: string; onPress: () => void; on?: boolean; toggle?: boolean }) {
+  return (
+    <Button
+      onPress={props.onPress}
+      selected={props.on}
+      accessibilityLabel={props.label}
+      class="h-8 flex-row items-center gap-2 rounded-lg border border-border px-3 transition active:scale-[0.97]"
+      style={{ backgroundColor: colors.raised, ...finish.raised }}
+    >
+      <If when={props.toggle}>
+        <View class="size-1.5 rounded-full" style={{ backgroundColor: props.on ? colors.accent : colors.faint }} />
+      </If>
+      <Text class="text-[13px] font-semibold text-foreground">{props.name}</Text>
+    </Button>
+  );
+}
+
+/** A label and a value in the status bar under the workspace. */
+function Status(props: { children: JSX.Element; strong?: boolean }) {
+  return <Text class={`font-mono text-[11px] tabular-nums ${props.strong ? "text-foreground" : "text-muted-foreground"}`}>{props.children}</Text>;
 }
 
 /**
@@ -120,6 +181,7 @@ function Panel(props: { panel: string }) {
  * and to their edges, closed, the docks toggled and resized. Narrower than
  * 600 pt it shows one group at a time and presents a dock at a time, as a
  * drawer or a sheet over the editors, leaving the layout's `open` as it is.
+ * The workspace fills the pane, in a card with the layout's state below it.
  */
 export function Dock() {
   const layout = signal<DockAreaLayout>(initial());
@@ -133,105 +195,117 @@ export function Dock() {
   let area!: DockAreaRef;
   const pointer = platform.idiom === "desktop";
 
-  const tool = (label: string, name: string, onPress: () => void, on: () => boolean) => (
-    <Button
-      onPress={onPress}
-      selected={on()}
-      accessibilityLabel={label}
-      class="rounded-md border border-border px-3 py-1.5 active:opacity-70 selected:bg-muted"
-    >
-      <Text class="text-[13px] font-medium text-foreground">{name}</Text>
-    </Button>
-  );
-
   return (
-    <View class="flex-1 gap-3 bg-background p-4">
+    <View class="flex-1 bg-background" style={{ padding: desktop() ? 24 : 16, gap: desktop() ? 16 : 12 }}>
       <View class="flex-row flex-wrap items-center gap-2">
-        {tool("Toggle files", "Files", () => area.toggleDock("left"), () => shown().left)}
-        {tool("Toggle terminal", "Terminal", () => area.toggleDock("bottom"), () => shown().bottom)}
-        {tool("Lock the layout", "Lock", () => locked.set(!locked()), locked)}
-        {tool("Reset the layout", "Reset", () => layout.set(initial()), () => false)}
-        <Text class="flex-1 text-right text-xs text-muted-foreground">
+        <Tool label="Toggle files" name="Files" toggle on={shown().left} onPress={() => area.toggleDock("left")} />
+        <Tool label="Toggle terminal" name="Terminal" toggle on={shown().bottom} onPress={() => area.toggleDock("bottom")} />
+        <Tool label="Lock the layout" name="Lock" toggle on={locked()} onPress={() => locked.set(!locked())} />
+        <Tool label="Reset the layout" name="Reset" onPress={() => layout.set(initial())} />
+        <Text class="min-w-40 flex-1 text-right text-[13px] text-faint">
           {hint("Hold a tab to reorder it", "Drag a tab onto another group, or to a group's edge to split it")}
         </Text>
       </View>
-      {/* At most 700 wide: the tests drag tabs by the places this gives
-          them, whatever the window's size (one 1000 wide or more). */}
-      <View class="w-full max-w-[700px] flex-1 overflow-hidden rounded-lg border border-border">
-        <DockArea
-          ref={area}
-          class="flex-1"
-          layout={layout()}
-          onLayoutChange={(next) => layout.set(next)}
-          onPanelRemove={(panel) => last.set(`Closed ${title(panel)}`)}
-          onPanelActiveChange={(panel, active) => active && last.set(`Showing ${title(panel)}`)}
-          onDockOpenChange={(placement, open) => shown.set({ ...shown(), [placement]: open })}
-          locked={locked()}
-          groupClass="flex-1 bg-background"
-          tabBarClass="flex-row border-b border-border bg-muted"
-          tabClass="group"
-          contentClass="flex-1"
-          handleAccessibilityLabel="Resize"
-          handleClass="basis-px bg-border group-hover:bg-muted-foreground group-active:bg-primary"
-          dockClass="bg-muted"
-          dropIndicatorClass="rounded-md border-2 border-primary bg-primary/10"
-          drawerClass="border-r border-border bg-background"
-          sheetClass="rounded-t-xl bg-background"
-          backdropClass="bg-black/30"
-          renderTab={(tab) => (
-            // A fixed size: the tests drag tabs by their places.
-            <View
-              testID={`tab-${tab.panel}`}
-              class="h-9 w-28 flex-row items-center gap-1 pl-3 pr-1 group-selected:bg-background"
-            >
-              <Text numberOfLines={1} class="flex-1 text-[13px] text-muted-foreground group-selected:text-foreground">
-                {title(tab.panel)}
-              </Text>
-              <If when={tab.closable && (pointer || tab.active)}>
-                <Button
-                  onPress={() => area.closePanel(tab.panel)}
-                  accessibilityLabel={`Close ${title(tab.panel)}`}
-                  class="size-6 items-center justify-center rounded-sm hover:bg-muted active:opacity-70"
+      <View
+        class="flex-1 border border-border bg-card"
+        style={{ borderRadius: radius.card, borderCurve: "continuous", padding: 5, gap: 5, ...finish.card }}
+      >
+        <View
+          class="flex-1 overflow-hidden border border-line bg-inset"
+          style={{ borderRadius: radius.inset, borderCurve: "continuous", ...finish.inset }}
+        >
+          <DockArea
+            ref={area}
+            class="flex-1"
+            layout={layout()}
+            onLayoutChange={(next) => layout.set(next)}
+            onPanelRemove={(panel) => last.set(`Closed ${title(panel)}`)}
+            onPanelActiveChange={(panel, active) => active && last.set(`Showing ${title(panel)}`)}
+            onDockOpenChange={(placement, open) => shown.set({ ...shown(), [placement]: open })}
+            locked={locked()}
+            groupClass="flex-1 bg-inset"
+            tabBarClass="flex-row gap-1 border-b border-line"
+            tabClass="group"
+            contentClass="flex-1"
+            handleAccessibilityLabel="Resize"
+            // A hairline that stays as it is; the thumb, a pill on it, grows in
+            // under the pointer and further while dragged (gpui-component's).
+            handleClass="basis-px bg-line"
+            handleThumbClass={handleThumb}
+            dockClass="bg-inset"
+            dropIndicatorClass="rounded-lg border-2 border-brand bg-brand-tint"
+            drawerClass="border-r border-border bg-card"
+            sheetClass="rounded-t-2xl border-t border-border bg-card"
+            backdropClass="bg-black/40"
+            renderTab={(tab) => (
+              // Sized to its title, as wide on either side of it, on the
+              // content's surface: the shown tab is lit and underlined in
+              // citrus (the sidebar's selection). With a pointer, the close
+              // button fades in over the tab's end while the pointer is on
+              // it; a touch screen keeps it beside the shown tab's title.
+              <View testID={`tab-${tab.panel}`} class="h-9 flex-row items-center gap-1 px-3">
+                <Text
+                  numberOfLines={1}
+                  class={`max-w-40 text-[13px] font-medium transition-colors ${tab.active ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"}`}
                 >
-                  <Text class="text-xs text-muted-foreground">×</Text>
+                  {title(tab.panel)}
+                </Text>
+                <If when={tab.closable && (pointer || tab.active)}>
+                  <Button
+                    onPress={() => area.closePanel(tab.panel)}
+                    accessibilityLabel={`Close ${title(tab.panel)}`}
+                    class={
+                      pointer
+                        ? "absolute right-1 top-2 size-5 items-center justify-center rounded-md bg-inset opacity-0 transition-opacity group-hover:opacity-100 hover:bg-raised"
+                        : "-mr-1.5 size-5 items-center justify-center rounded-md active:opacity-70"
+                    }
+                  >
+                    <Text class="text-[13px] text-muted-foreground">×</Text>
+                  </Button>
+                </If>
+                <If when={tab.active}>
+                  <View pointerEvents="none" class="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-brand" />
+                </If>
+              </View>
+            )}
+            renderDock={(dock) => (
+              <View class="h-8 flex-row items-center border-b border-line pl-3 pr-1">
+                <Text class="flex-1 text-[11px] font-semibold uppercase tracking-wider text-faint">
+                  {DOCKS[dock.placement] ?? dock.placement}
+                </Text>
+                <Button
+                  // Toggled: at compact width that dismisses the drawer, in
+                  // the full presentation it closes the open dock.
+                  onPress={() => area.toggleDock(dock.placement)}
+                  accessibilityLabel={`Hide ${DOCKS[dock.placement] ?? dock.placement}`}
+                  class="rounded-md px-2 py-0.5 hover:bg-hover active:opacity-70"
+                >
+                  <Text class="text-xs font-medium text-muted-foreground">Hide</Text>
                 </Button>
-              </If>
-            </View>
-          )}
-          renderDock={(dock) => (
-            <View class="h-8 flex-row items-center border-b border-border pl-3 pr-1">
-              <Text class="flex-1 text-xs font-semibold text-muted-foreground">{DOCKS[dock.placement] ?? dock.placement}</Text>
-              <Button
-                // Toggled: at compact width that dismisses the drawer, in
-                // the full presentation it closes the open dock.
-                onPress={() => area.toggleDock(dock.placement)}
-                accessibilityLabel={`Hide ${DOCKS[dock.placement] ?? dock.placement}`}
-                class="rounded-sm px-2 py-0.5 hover:bg-background active:opacity-70"
-              >
-                <Text class="text-xs text-muted-foreground">Hide</Text>
-              </Button>
-            </View>
-          )}
-          renderDragPreview={(tab) => (
-            <View class="rounded-md border border-border bg-background px-3 py-1.5 shadow-md">
-              <Text class="text-[13px] text-foreground">{title(tab.panel)}</Text>
-            </View>
-          )}
-          renderPanel={(panel) => <Panel panel={panel.id} />}
-          renderEmpty={() => (
-            <View class="flex-1 items-center justify-center">
-              <Text class="text-sm text-muted-foreground">Every editor is closed</Text>
-            </View>
-          )}
-        />
-      </View>
-      <View class="gap-0.5">
-        <Text class="font-mono text-xs text-foreground">{`Center: ${describe(layout().center)}`}</Text>
-        <Text class="font-mono text-xs text-muted-foreground">{`First slot: ${firstSlot(layout().center)}`}</Text>
-        <Text class="font-mono text-xs text-muted-foreground">{describeDock("Left", layout().left)}</Text>
-        <Text class="font-mono text-xs text-muted-foreground">{describeDock("Bottom", layout().bottom)}</Text>
-        <Text class="font-mono text-xs text-muted-foreground">{`Showing docks: ${["left", "bottom"].filter((p) => shown()[p]).map((p) => DOCKS[p]).join(", ") || "none"}`}</Text>
-        <Text class="font-mono text-xs text-muted-foreground">{`Last event: ${last()}`}</Text>
+              </View>
+            )}
+            renderDragPreview={(tab) => (
+              <View class="rounded-lg border border-border px-3 py-1.5" style={{ backgroundColor: colors.raised, ...finish.raised }}>
+                <Text class="text-[13px] font-medium text-foreground">{title(tab.panel)}</Text>
+              </View>
+            )}
+            renderPanel={(panel) => <Panel panel={panel.id} />}
+            renderEmpty={() => (
+              <View class="flex-1 items-center justify-center gap-1">
+                <Text class="text-sm font-semibold text-foreground">Every editor is closed</Text>
+                <Text class="text-xs text-muted-foreground">Reset brings them back</Text>
+              </View>
+            )}
+          />
+        </View>
+        <View class="flex-row flex-wrap gap-x-5 gap-y-1 px-2.5 pb-1 pt-0.5">
+          <Status strong>{`Center: ${describe(layout().center)}`}</Status>
+          <Status>{`First slot: ${firstSlot(layout().center)}`}</Status>
+          <Status>{describeDock("Left", layout().left)}</Status>
+          <Status>{describeDock("Bottom", layout().bottom)}</Status>
+          <Status>{`Showing docks: ${["left", "bottom"].filter((p) => shown()[p]).map((p) => DOCKS[p]).join(", ") || "none"}`}</Status>
+          <Status>{`Last event: ${last()}`}</Status>
+        </View>
       </View>
     </View>
   );

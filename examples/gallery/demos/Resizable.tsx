@@ -1,17 +1,18 @@
 import { signal, Text, untracked, View } from "nsh";
 import { Button, ResizablePanel, ResizablePanelGroup } from "nsh/base";
 import { windowSize } from "nsh/device";
-import { hint } from "../ui";
+import { handleThumb, hint } from "../ui";
 
 // `nsh/base`'s resizable panels own the drags (run natively, frame by
 // frame, with no JS on the way), the minimums and maximums and what
 // screen readers say; the sizes are the app's: a group reports them when
 // a drag ends and the app passes them back as each panel's `size`. The
-// look is the app's too: the handles' hairlines below are theme classes.
+// look is the app's too: the handles' hairlines and thumbs below are theme
+// classes.
 
-/** A handle's line: lit under the pointer and while dragged. */
-const across = "h-full w-px bg-border group-hover:bg-muted-foreground group-active:bg-primary";
-const along = "h-px w-full bg-border group-hover:bg-muted-foreground group-active:bg-primary";
+/** A handle's line, which stays as it is: its thumb shows where to drag. */
+const across = "h-full w-px bg-border";
+const along = "h-px w-full bg-border";
 
 const round = (sizes: number[]) => sizes.map((s) => Math.round(s)).join(" · ");
 
@@ -55,7 +56,7 @@ export function Resizable() {
         </Button>
       </View>
       <View class="flex-1 overflow-hidden rounded-lg border border-border bg-background">
-        <ResizablePanelGroup axis="horizontal" handleClass={across} handleAccessibilityLabel="Resize the sidebar" onResize={(sizes) => last.set(`Row: ${round(sizes)}`)}>
+        <ResizablePanelGroup axis="horizontal" handleClass={across} handleThumbClass={handleThumb} handleAccessibilityLabel="Resize the sidebar" onResize={(sizes) => last.set(`Row: ${round(sizes)}`)}>
           <ResizablePanel size={sidebar()} minSize={120} maxSize={360} onResize={(size) => sidebar.set(size)}>
             <View class="flex-1 bg-muted">
               <Pane title="Files" detail="120 to 360 pt" size={`Sidebar ${Math.round(sidebar())} pt`} />
@@ -65,6 +66,7 @@ export function Resizable() {
             <ResizablePanelGroup
               axis="vertical"
               handleClass={along}
+              handleThumbClass={handleThumb}
               handleAccessibilityLabel="Resize the console"
               onResize={(sizes) => last.set(`Column: ${round(sizes)}`)}
             >
