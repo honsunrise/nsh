@@ -26,7 +26,7 @@ fn start_in(app: &str, environment: Environment) -> (Engine, Receiver<MountBatch
 
 /// [`start_in`] with the capabilities the app declares (JSON, `nsh.json`'s
 /// `capabilities` form) and an `nsh.json`.
-fn start_with(
+pub(crate) fn start_with(
     app: &str,
     environment: Environment,
     capabilities: Option<&str>,
@@ -78,11 +78,14 @@ fn start_with(
         ui_sets,
         runtime: None,
         data_dir: None,
+        cache: nsh_engine::CacheOptions::off(),
         storage: None,
         clock: Default::default(),
         context: Default::default(),
         pinned: Default::default(),
         clipboard: None,
+        host: Default::default(),
+        picker: None,
     };
     (
         Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
@@ -209,7 +212,10 @@ fn a_stateful_component_steps_while_held_on((engine, rx): (Engine, Receiver<Moun
 }
 
 /// The batches until `done` holds for one (or nothing came for 500ms).
-fn until(rx: &Receiver<MountBatch>, mut done: impl FnMut(&MountBatch) -> bool) -> Vec<MountBatch> {
+pub(crate) fn until(
+    rx: &Receiver<MountBatch>,
+    mut done: impl FnMut(&MountBatch) -> bool,
+) -> Vec<MountBatch> {
     let mut batches = Vec::new();
     while let Ok(batch) = rx.recv_timeout(Duration::from_millis(500)) {
         let stop = done(&batch);
@@ -221,8 +227,50 @@ fn until(rx: &Receiver<MountBatch>, mut done: impl FnMut(&MountBatch) -> bool) -
     batches
 }
 
-fn shows(batch: &MountBatch, wanted: &str) -> bool {
+pub(crate) fn shows(batch: &MountBatch, wanted: &str) -> bool {
     text_ids(batch, wanted).is_some()
+}
+
+const KEYED_CHILDREN: &str = r#"import { mount, signal, Text } from "nsh";
+import { Group } from "test/ui";
+
+const items = signal([{ id: "a", label: "A1" }, { id: "b", label: "B1" }]);
+// New objects, the same keys: the rows are kept.
+setTimeout(() => items.set([{ id: "a", label: "A2" }, { id: "b", label: "B2" }]), 50);
+
+mount(() => (
+  <Group>
+    <Each of={items()} key={(i: { id: string }) => i.id}>
+      {(item) => <Text>{item().label}</Text>}
+    </Each>
+  </Group>
+));
+"#;
+
+/// A component's children made by a keyed `<Each>` keep their rows when
+/// the items change: the children's expression is not made again.
+#[test]
+fn a_components_keyed_children_keep_their_rows() {
+    let (_engine, rx) = start(KEYED_CHILDREN);
+    let batches = until(&rx, |b| shows(b, "A2"));
+    let first = &batches[0];
+    let a = text_ids(first, "A1").expect("A1 shown");
+    let last = batches.last().unwrap();
+    assert_eq!(
+        text_ids(last, "A2"),
+        Some(a),
+        "the row's text is updated in place"
+    );
+    let deleted = batches[1..]
+        .iter()
+        .flat_map(|b| &b.items)
+        .any(|i| matches!(i, MountItem::Delete { id } if *id % 2 == 0));
+    assert!(!deleted, "no row of the app's is made again");
+    let removed = batches[1..]
+        .iter()
+        .flat_map(|b| &b.items)
+        .any(|i| matches!(i, MountItem::Remove { id } if *id % 2 == 0));
+    assert!(!removed, "the moved row stays in its wrapper");
 }
 
 const LAZY_SHEET: &str = r#"import { mount, signal, untracked, Text } from "nsh";
@@ -1067,6 +1115,71 @@ fn clipboard_images_and_files_reach_js() {
     );
 }
 
+const PICKER: &str = r#"import { mount, signal, Text } from "nsh";
+import { Picker } from "nsh/picker";
+
+const shown = signal("");
+setTimeout(async () => {
+  const images = await Picker.pickImages({ multiple: true, limit: 3, maxDimension: 1024 });
+  const [{ file, size }] = images;
+  const bytes = await file.bytes();
+  const url = URL.createObjectURL(file);
+  shown.set(
+    `${images.length} ${file instanceof File} ${file.name} ${file.type} ${file.size} ${size.width}x${size.height} ${bytes.slice(1, 4).join(",")} ${url.startsWith("blob:")} ${file.lastModified}`,
+  );
+}, 0);
+
+mount(() => <Text>{shown()}</Text>);
+"#;
+
+#[test]
+fn picked_images_reach_js_as_files() {
+    let (engine, rx) = start(PICKER);
+    let control = engine.control();
+    let mut asked = None;
+    until(&rx, |batch| {
+        for item in &batch.items {
+            if let MountItem::Command {
+                id: ROOT_ID,
+                command: Command::PickImages { id, request },
+            } = item
+            {
+                asked = Some(*request);
+                let mut file = nsh_core::picker::PickedFile::new(
+                    "IMG_0042.HEIC",
+                    "image/jpeg",
+                    nsh_core::ImageData::new(vec![0xff, 0xd8, 0xff, 0xe0, 0, 0]),
+                );
+                file.size = Size::new(
+                    nsh_core::geometry::DevicePixels(1024),
+                    nsh_core::geometry::DevicePixels(768),
+                );
+                file.last_modified = Some(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_700_000_000_000),
+                );
+                control.dispatch_event(
+                    ROOT_ID,
+                    EventKind::Pick,
+                    EventPayload::Picked {
+                        id: *id,
+                        files: vec![file],
+                    },
+                );
+            }
+        }
+        shows(
+            batch,
+            "1 true IMG_0042.jpg image/jpeg 6 1024x768 216,255,224 true 1700000000000",
+        )
+    });
+    let asked = asked.expect("a pick");
+    assert_eq!(asked.limit, 3);
+    assert_eq!(
+        asked.max_dimension,
+        Some(nsh_core::geometry::DevicePixels(1024))
+    );
+}
+
 const INPUT_TRAITS: &str = r##"import { mount, Input, Text } from "nsh";
 
 mount(() => (
@@ -1079,7 +1192,7 @@ mount(() => (
       multiline
       style={{ placeholderColor: "#00ff00", selectionColor: "#0000ff" }}
     />
-    <Input class="placeholder:text-white selection:text-black" />
+    <Input class="placeholder:text-white selection:bg-black" />
     <Text selectable style={{ selectionColor: "#ff0000" }}>Pick me</Text>
   </>
 ));
@@ -1421,6 +1534,7 @@ fn menus_reach_the_platform_and_call_back() {
         enabled: true,
         checked: None,
         role: None,
+        when: nsh_core::keymap::When::Always,
     };
     let quit = MenuAction {
         id: 0,
@@ -1429,6 +1543,7 @@ fn menus_reach_the_platform_and_call_back() {
         enabled: true,
         checked: None,
         role: Some(MenuRole::Quit),
+        when: nsh_core::keymap::When::Always,
     };
     assert_eq!(
         &*menu,
@@ -2556,4 +2671,185 @@ fn a_base_progress_shows_the_apps_value_in_its_indicator() {
     });
     assert_eq!(value(&after), Some(range(None)));
     assert_eq!(width(&after), Some(50.0));
+}
+
+const TAB_BAR: &str = r##"import { mount, signal } from "nsh";
+import { TabBar } from "nsh/mobile";
+
+const selected = signal(0);
+
+function App() {
+  return (
+    <TabBar
+      items={[
+        { title: "Records", icon: "list.bullet" },
+        { title: "Stats", icon: "chart.bar" },
+      ]}
+      selectedIndex={selected()}
+      onChange={(index: number) => selected.set(index)}
+    />
+  );
+}
+
+mount(App);
+"##;
+
+fn is_tab_bar(item: &MountItem) -> bool {
+    matches!(item, MountItem::Component { name, .. }
+        if &**name == nsh_core::platform::TAB_BAR_COMPONENT)
+}
+
+/// `nsh/mobile`'s `TabBar` is the system's component on iOS and Android,
+/// given the tabs as the app wrote them.
+#[test]
+fn the_tab_bar_is_the_systems_component_on_ios_and_android() {
+    use nsh_core::platform::Os;
+
+    for os in [Os::Ios, Os::Android] {
+        let (_engine, rx) = start_in(
+            TAB_BAR,
+            Environment {
+                os,
+                ..Environment::default()
+            },
+        );
+        let batches = until(&rx, |batch| batch.items.iter().any(is_tab_bar));
+        let props = batches.iter().find_map(|batch| {
+            batch.items.iter().find_map(|i| match i {
+                MountItem::ComponentProps { props, .. } => Some(props.clone()),
+                _ => None,
+            })
+        });
+        let props = props.expect("its props reach it");
+        let value = |key: &str| {
+            props
+                .iter()
+                .find(|(name, _)| &**name == key)
+                .and_then(|(_, value)| value.clone())
+        };
+        assert_eq!(
+            value("items"),
+            Some(serde_json::json!([
+                { "title": "Records", "icon": "list.bullet" },
+                { "title": "Stats", "icon": "chart.bar" },
+            ])),
+            "{os:?}"
+        );
+        assert_eq!(value("selectedIndex"), Some(serde_json::json!(0)), "{os:?}");
+    }
+}
+
+/// Where the system has no tab bar it renders nothing: no component at all;
+/// `isAvailable` tells which platforms `nsh/mobile` serves.
+#[test]
+fn the_tab_bar_renders_nothing_on_the_desktops_and_the_web() {
+    use nsh_core::platform::Os;
+
+    let app = TAB_BAR
+        .replace("mount, signal", "mount, signal, Text")
+        .replace("import { TabBar }", "import { TabBar, isAvailable }")
+        .replace(
+            "mount(App);",
+            "mount(() => <><App /><Text>{`Ready: ${isAvailable}`}</Text></>);",
+        );
+    for (os, available) in [(Os::Ios, true), (Os::Android, true)] {
+        let (_engine, rx) = start_in(
+            &app,
+            Environment {
+                os,
+                ..Environment::default()
+            },
+        );
+        let ready = format!("Ready: {available}");
+        let batches = until(&rx, |batch| shows(batch, &ready));
+        assert!(batches.iter().any(|batch| shows(batch, &ready)), "{os:?}");
+    }
+    for os in [Os::MacOs, Os::Windows, Os::Linux, Os::Web] {
+        let (_engine, rx) = start_in(
+            &app,
+            Environment {
+                os,
+                ..Environment::default()
+            },
+        );
+        let batches = until(&rx, |batch| shows(batch, "Ready: false"));
+        assert!(
+            batches.iter().any(|batch| shows(batch, "Ready: false")),
+            "{os:?}"
+        );
+        let platform = batches
+            .iter()
+            .any(|batch| batch.items.iter().any(is_tab_bar));
+        assert!(!platform, "no system bar on {os:?}, no component");
+    }
+}
+
+/// The user's choice reaches `onChange` as the index, and reactive updates
+/// reach the same bar; `selectedIndex` removed is its default, 0.
+#[test]
+fn the_tab_bar_reports_the_users_choice_and_follows_its_props() {
+    let app = r#"import { mount, signal, Text, View } from "nsh";
+import { TabBar } from "nsh/mobile";
+const selected = signal<number | undefined>(0);
+const items = signal([{ title: "Records" }, { title: "Stats" }]);
+mount(() => <View>
+  <TabBar items={items()} selectedIndex={selected()}
+    onChange={(index) => {
+      selected.set(index);
+      items.set([{ title: "Records" }, { title: "Statistics" }]);
+    }} />
+  <Text>{`Selected: ${selected()}`}</Text>
+  <Text onPress={() => selected.set(undefined)}>Reset</Text>
+</View>);
+"#;
+    let (engine, rx) = start(app);
+    let initial = until(&rx, |batch| shows(batch, "Selected: 0"));
+    let bar = initial
+        .iter()
+        .flat_map(|batch| &batch.items)
+        .find_map(|item| match item {
+            MountItem::Component { id, .. } if is_tab_bar(item) => Some(*id),
+            _ => None,
+        })
+        .expect("the system bar");
+    engine.control().dispatch_event(
+        bar,
+        EventKind::NativeEvent,
+        EventPayload::Native {
+            name: "change".into(),
+            data: serde_json::json!(1),
+        },
+    );
+    let updates = until(&rx, |batch| shows(batch, "Selected: 1"));
+    assert!(updates.iter().any(|batch| shows(batch, "Selected: 1")));
+    let props: Vec<_> = updates
+        .iter()
+        .flat_map(|batch| &batch.items)
+        .filter_map(|item| match item {
+            MountItem::ComponentProps { id, props } if *id == bar => Some(props),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(
+        props
+            .iter()
+            .any(|(name, value)| &**name == "selectedIndex"
+                && *value == Some(serde_json::json!(1)))
+    );
+    assert!(props.iter().any(|(name, value)| &**name == "items"
+        && *value == Some(serde_json::json!([{ "title": "Records" }, { "title": "Statistics" }]))));
+    let reset = initial
+        .iter()
+        .find_map(|batch| text_ids(batch, "Reset"))
+        .expect("reset text");
+    engine
+        .control()
+        .dispatch_event(reset, EventKind::Press, EventPayload::None);
+    let reset = until(&rx, |batch| shows(batch, "Selected: undefined"));
+    assert!(reset.iter().any(|batch| batch.items.iter().any(|item| {
+        matches!(item, MountItem::ComponentProps { id, props } if *id == bar
+            && props.iter().any(|(name, value)| &**name == "selectedIndex"
+                && *value == Some(serde_json::json!(0))))
+    })));
 }

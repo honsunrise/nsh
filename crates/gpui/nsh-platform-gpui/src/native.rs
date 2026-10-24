@@ -233,8 +233,14 @@ impl std::fmt::Debug for Components {
 }
 
 impl Components {
-    /// Registers `factory` under `name` (replacing an earlier one).
+    /// Registers `factory` under `name` (replacing an earlier one). Names
+    /// under `nsh/` are NSH's own: registering one logs a warning and
+    /// changes nothing.
     pub fn register(&self, name: &str, factory: ComponentFactory) {
+        if nsh_core::platform::is_reserved_component(name) {
+            log::warn!("native component `{name}` is not registered: names under `nsh/` are NSH's");
+            return;
+        }
         self.factories.borrow_mut().insert(name.into(), factory);
         self.missing.borrow_mut().remove(name);
     }
@@ -832,7 +838,9 @@ fn locate(source: &str, base: Option<&AssetBase>) -> Option<Location> {
     if let Some(path) = source.strip_prefix("asset:/") {
         let path = path.trim_start_matches('/');
         return match base {
-            Some(AssetBase::Directory(dir)) => Some(Location::Path(dir.join(path))),
+            Some(dirs @ (AssetBase::Directory(_) | AssetBase::Directories(_))) => {
+                dirs.file(path).map(Location::Path)
+            }
             Some(AssetBase::Http(url)) => Some(Location::Url(format!(
                 "{}/{path}",
                 url.trim_end_matches('/')
