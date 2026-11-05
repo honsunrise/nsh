@@ -162,6 +162,12 @@ closes the retained window, stops the engine and returns from `run_app`.
 The app's own code quits the same way with `nsh_core::element::desktop::quit()` (TS: `Application.quit()`), while
 `nsh_core::element::desktop::close_window()` follows the chosen window-close policy.
 
+`AppOptions { transparent: true, ..Default::default() }` opens `run_app`'s window nonopaque with a clear
+background, so what the app leaves unpainted shows what is behind the window (a HUD panel, a
+[`macos={{ backdrop }}`](./styling.md#filters-and-blending) with `behind-window`). It is `false` by default.
+An embedded `AppView` does not change the window it is put in: make your own `NSWindow` nonopaque with a clear
+`backgroundColor` for the same look.
+
 
 `AppOptions::notifications` hands the process's [notifications](../modules/nsh.md#notifications) to the app the view runs:
 its banners, presses and badge. It is off by default, so an embedded app's notifications are `unavailable` and your
@@ -226,7 +232,12 @@ what React Native reports: the typed text, `"Enter"`, `"Backspace"`, and `"Escap
 Not supported, or different:
 
 - **Zooming scroll views** (`zoomTo`, the zoom props).
-- **`mixBlendMode`**, and `brightness()` above 1.
+- **`brightness()`** above 1 is not drawn. **`mixBlendMode`** and **backdrops** are drawn by Core Animation:
+  `mixBlendMode` as the view layer's compositing filter, `macos={{ backdrop: { material, blending, state } }}` as an
+  `NSVisualEffectView` below the view (any AppKit material and state, whether or not a `backdropFilter` is set), and
+  `glassTintColor` as `glassEffect`'s tint on macOS 26; before macOS 26 the blur stands in for glass. These are
+  compositor effects, so `app.screenshot()` does not show them, and a `behind-window` material shows the desktop only
+  through a see-through window (`AppOptions::transparent`).
 - **Inputs**: content types and autofill, keyboard types, autocapitalization, letter spacing; input accessory views
   are never shown (there is no software keyboard) and `keyboardShouldPersistTaps` is ignored.
 - **`WebView`'s `scrollable={false}`** keeps the mouse wheel and the trackpad from scrolling the page: they scroll

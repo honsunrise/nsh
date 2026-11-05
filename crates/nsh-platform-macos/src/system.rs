@@ -34,7 +34,9 @@
 //! app's: the opaque background of its top view when that fills the root,
 //! else white / neutral-950 by the scheme (as the Linux backend's). It
 //! shows where the app has not drawn yet, as in the area a window grows
-//! by before the layout at its new size arrives.
+//! by before the layout at its new size arrives. A see-through surface
+//! ([`crate::AppOptions::transparent`]) has none: what the app leaves
+//! unpainted shows what is behind the window.
 //!
 //! The status bar has no desktop equivalent. The clipboard is the general
 //! pasteboard; `hasText` only looks at the types on offer.
@@ -333,8 +335,18 @@ pub(crate) fn environment_applied(surface: &Surface) {
     follow_background(surface);
 }
 
-/// Sets the surface's background (see the module doc), if it changed.
+/// Sets the surface's background (see the module doc), if it changed. A
+/// see-through window ([`crate::AppOptions::transparent`]) has none: what
+/// the app leaves unpainted shows what is behind the window.
 fn follow_background(surface: &Surface) {
+    if surface.transparent.get() {
+        if surface.background.replace(None).is_some()
+            && let Some(layer) = crate::view::superview(surface.root.ns()).and_then(|v| v.layer())
+        {
+            crate::surface::quiet(|| layer.setBackgroundColor(None));
+        }
+        return;
+    }
     let app = surface
         .root
         .container()
