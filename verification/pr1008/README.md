@@ -1,9 +1,9 @@
 # PR #1008 review follow-up evidence
 
-Framework fix head: `e448d451e7b586d0348309ffa7f3c4e8d4e61f6b`. Paired checker fix: `cb812f800a753b41ab8285dcda91b2f62e390c3a`.
-This branch contains evidence only and is not the PR source branch.
-The framework history was rebased onto the target branch, with no merge commits. Its tree remains
-`6f01d72960bd740754d5c789a2923b33db4b29cf`, identical before and after rebase.
+Framework fix head: `de735c18c829340d4afe706ec1bfa282407a59a8`, rebased onto upstream `0d0338ac55e94a004acdb59a333356410c3530c4`.
+Paired checker fix: `ab9d1c629e7bab4de2312fd54028364e1ec3cb02`, rebased onto `660a8fe28fd7164285fdf923bde1e61e32e6e666`.
+This branch contains evidence only and is not the PR source branch. Neither PR adds a merge commit.
+The current upstream pending-focus implementation superseded the local OrderWatch patch, which was dropped during rebase.
 
 ## Exercised paths
 
@@ -16,6 +16,7 @@ The framework history was rebased onto the target branch, with no merge commits.
 - Light/dark appearance overrides were applied only to the test window.
 - Standalone transparent host: `isOpaque=false`, background alpha 0, unpainted screenshot pixel alpha 0; baseline opaque window had alpha 255.
 - Existing opaque blue embedding host retained opacity/background on first `AppView::new`/`load` with `transparent=true`, and after a behind-window material update. Reparenting a live view also retained the host settings and click state.
+- After the live-main rebase, the fixture was rebuilt and standalone transparency, HUD switching, live tint/clear with glass identity retained, click delivery, and first-load opaque embedding were exercised again. The `pr1008-rebased-standalone.png` and `pr1008-rebased-embedded.png` captures cover this final code (the subsequent CI-selection edit changes no runtime code).
 
 ## Boundaries
 
@@ -34,15 +35,22 @@ Only the disposable fixture binary is instrumented; none of this driver is shipp
 
 ## Validation results
 
+Completed after rebasing onto current upstream main:
+
 - Bundled skills: 5 passed.
-- Core after order notification correction: 1134 passed, 9 existing ignored.
-- Menu suite: 17 passed, including the new single-item Web/Linux control.
-- macOS backend: 82 passed; engine macOS prop mount test: 1 passed.
-- Original headless gallery context-menu tests: 3 passed; one/two-item discriminator: 2 passed after correction (single failed before, two passed).
-- Full Gallery headless suite: 294 passed.
-- Real Chromium context-menu tests: 3 passed after the explicit keyboard event correction; tap and long press are included.
+- Core: 1143 passed, 9 existing ignored.
+- Menu suite: 16 passed, using upstream's pending-focus implementation.
+- macOS backend: 87 passed.
+- Original headless context-menu file: all 3 passed, including the held-finger case.
+- Real Chromium: keyboard context menu and ordinary tap each passed. The upstream `nsh.js` with the same WASM failed the keyboard case, confirming the retained browser dispatch correction is still needed.
+- The real-browser test host drives a desktop mouse. Its long-press operation is not a touch input; the held-finger case therefore is not part of the newly added desktop-Chrome selection. The original full headless file remains unchanged and runs in CI.
 - Clippy core/base/engine/macOS all-targets with `-D warnings`: passed.
-- Paired compatibility checker: 32 passed, including `checkout_apps_run` and both material-value tests; no ignored tests. No historical releases are recorded in this checker repository.
-- Extra browser module suite: 80 passed, 2 skipped, 1 bidi-link test failed. The exact same bidi failure was reproduced at the fixed base; it is not changed or suppressed here.
+- Browser modules: 88 passed, 2 skipped, 1 bidi-link fixture failure. The same failure was reproduced at the earlier fixed baseline; it is not changed or suppressed here.
+
+Earlier-stage evidence, not presented as a rerun of the final rebased tree:
+
+- Full Gallery headless suite: 294 passed before the live-main rebase.
+- Paired checker: 32 passed, including `checkout_apps_run` and both material-value tests, before the live-main rebase. The fresh rebased result is reported in PR comments. No historical releases are recorded in this checker repository.
 
 Remote workflow state is reported separately in the PR comments; local evidence does not override required upstream gates.
+
