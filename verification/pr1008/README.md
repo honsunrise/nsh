@@ -13,6 +13,8 @@ This branch contains evidence only, not additional production changes. Neither P
 - `pr1008-{appkit,uikit}-{light,dark}-{blue,clear,default,red}.png` are WindowServer captures. They are not `renderInContext:` screenshots.
 - `apple-glass-smoke/native-proof.json` and `mac-native-proof.json` record the observations. Native test applications were closed afterward.
 - Final-head UIKit lifecycle tests: 2 passed. Bundled-guide checks: 5 passed. Changed Rust modules passed the repository's nightly formatting check.
+- Final-head isolated build directory: core 1154 passed / 9 existing ignored; engine `platform` selection 23 passed / 320 filtered; macOS backend 87 passed; core/engine all-target strict Clippy passed; CLI built; paired checker 32 passed, including checkout applications. The combined run completed successfully in 931.93 seconds.
+- Commands: `cargo test --locked -p nsh-core --lib`; `cargo test --locked -p nsh-engine --test engine platform`; `cargo test --locked -p nsh-platform-macos --lib`; `cargo clippy --locked -p nsh-core -p nsh-engine --all-targets -- -D warnings`; `cargo build --locked -p nsh-cli`; then `NSH_DIR=<framework> NSH_BIN=<isolated-target>/debug/nsh cargo test --manifest-path <checker>/Cargo.toml --features nsh-core/shader`. The paths identify the paired source heads above, not an installed NSH CLI.
 
 ### Boundaries
 
