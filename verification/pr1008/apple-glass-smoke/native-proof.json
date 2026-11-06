@@ -1,0 +1,158 @@
+{
+  "source": "481f4a6ed5513968d19a71fde372ce058190eddb",
+  "pid": 24994,
+  "window": 21778,
+  "states": [
+    {
+      "dark": false,
+      "label": "Blue",
+      "native": {
+        "class": "UIVisualEffectView",
+        "effectClass": "UIGlassEffect",
+        "glass": true,
+        "height": 148,
+        "id": "",
+        "label": "",
+        "object": "0x0000007739aac780",
+        "tint": [
+          0,
+          0,
+          1,
+          0.5019607843137255
+        ],
+        "width": 358
+      }
+    },
+    {
+      "dark": false,
+      "label": "Clear",
+      "native": {
+        "class": "UIVisualEffectView",
+        "effectClass": "UIGlassEffect",
+        "glass": true,
+        "height": 148,
+        "id": "",
+        "label": "",
+        "object": "0x0000007739aac780",
+        "tint": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "width": 358
+      }
+    },
+    {
+      "dark": false,
+      "label": "Default",
+      "native": {
+        "class": "UIVisualEffectView",
+        "effectClass": "UIGlassEffect",
+        "glass": true,
+        "height": 148,
+        "id": "",
+        "label": "",
+        "object": "0x0000007739aac780",
+        "tint": null,
+        "width": 358
+      }
+    },
+    {
+      "dark": false,
+      "label": "Red",
+      "native": {
+        "class": "UIVisualEffectView",
+        "effectClass": "UIGlassEffect",
+        "glass": true,
+        "height": 148,
+        "id": "",
+        "label": "",
+        "object": "0x0000007739aac780",
+        "tint": [
+          1,
+          0,
+          0,
+          0.5019607843137255
+        ],
+        "width": 358
+      }
+    },
+    {
+      "dark": true,
+      "label": "Blue",
+      "native": {
+        "class": "UIVisualEffectView",
+        "effectClass": "UIGlassEffect",
+        "glass": true,
+        "height": 148,
+        "id": "",
+        "label": "",
+        "object": "0x0000007739aac780",
+        "tint": [
+          0,
+          0,
+          1,
+          0.5019607843137255
+        ],
+        "width": 358
+      }
+    },
+    {
+      "dark": true,
+      "label": "Clear",
+      "native": {
+        "class": "UIVisualEffectView",
+        "effectClass": "UIGlassEffect",
+        "glass": true,
+        "height": 148,
+        "id": "",
+        "label": "",
+        "object": "0x0000007739aac780",
+        "tint": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "width": 358
+      }
+    },
+    {
+      "dark": true,
+      "label": "Default",
+      "native": {
+        "class": "UIVisualEffectView",
+        "effectClass": "UIGlassEffect",
+        "glass": true,
+        "height": 148,
+        "id": "",
+        "label": "",
+        "object": "0x0000007739aac780",
+        "tint": null,
+        "width": 358
+      }
+    },
+    {
+      "dark": true,
+      "label": "Red",
+      "native": {
+        "class": "UIVisualEffectView",
+        "effectClass": "UIGlassEffect",
+        "glass": true,
+        "height": 148,
+        "id": "",
+        "label": "",
+        "object": "0x0000007739aac780",
+        "tint": [
+          1,
+          0,
+          0,
+          0.5019607843137255
+        ],
+        "width": 358
+      }
+    }
+  ],
+  "blur_ignores_tint_both_appearances": true
+}

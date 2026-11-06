@@ -1,0 +1,16 @@
+[package]
+name="apple-glass-smoke"
+version="0.0.0"
+edition="2024"
+[workspace]
+[dependencies]
+nsh-core={path="../../../crates/nsh-core",features=["svg"]}
+nsh-base={path="../../../crates/nsh-base"}
+[target.'cfg(target_os = "ios")'.dependencies]
+nsh-platform-ios={path="../../../crates/nsh-platform-ios",default-features=false}
+objc2="0.6.5"
+objc2-foundation={version="0.3.2",default-features=false,features=["std","NSObject","NSString"]}
+objc2-ui-kit={version="0.3.2",default-features=false,features=["std"]}
+objc2-core-foundation={version="0.3.2",default-features=false,features=["std"]}
+[target.'cfg(target_os = "macos")'.dependencies]
+nsh-platform-macos={path="../../../crates/nsh-platform-macos",default-features=false}

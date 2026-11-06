@@ -1,0 +1,284 @@
+{
+  "source": "481f4a6ed5513968d19a71fde372ce058190eddb",
+  "pid": 27404,
+  "window": 21850,
+  "launch": "LaunchServices app bundle with NSPrincipalClass=NSApplication",
+  "states": [
+    {
+      "dark": false,
+      "label": "Blue",
+      "active": true,
+      "key": true,
+      "native": {
+        "animationKeys": [],
+        "class": "NSGlassEffectView",
+        "glassStyle": 0,
+        "height": 148,
+        "hidden": false,
+        "id": "",
+        "label": "",
+        "object": "0x000000010aae6e50",
+        "opacity": 1,
+        "presentation": {
+          "height": 148,
+          "opacity": 1,
+          "translateX": 0,
+          "translateY": 0,
+          "width": 1128,
+          "x": 0,
+          "y": 0
+        },
+        "role": "AXUnknown",
+        "tint": [
+          0,
+          0,
+          1,
+          0.5019607843137255
+        ],
+        "width": 1128,
+        "x": 36,
+        "y": 69
+      }
+    },
+    {
+      "dark": false,
+      "label": "Clear",
+      "active": true,
+      "key": true,
+      "native": {
+        "animationKeys": [],
+        "class": "NSGlassEffectView",
+        "glassStyle": 0,
+        "height": 148,
+        "hidden": false,
+        "id": "",
+        "label": "",
+        "object": "0x000000010aae6e50",
+        "opacity": 1,
+        "presentation": {
+          "height": 148,
+          "opacity": 1,
+          "translateX": 0,
+          "translateY": 0,
+          "width": 1128,
+          "x": 0,
+          "y": 0
+        },
+        "role": "AXUnknown",
+        "tint": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "width": 1128,
+        "x": 36,
+        "y": 69
+      }
+    },
+    {
+      "dark": false,
+      "label": "Default",
+      "active": true,
+      "key": true,
+      "native": {
+        "animationKeys": [],
+        "class": "NSGlassEffectView",
+        "glassStyle": 0,
+        "height": 148,
+        "hidden": false,
+        "id": "",
+        "label": "",
+        "object": "0x000000010aae6e50",
+        "opacity": 1,
+        "presentation": {
+          "height": 148,
+          "opacity": 1,
+          "translateX": 0,
+          "translateY": 0,
+          "width": 1128,
+          "x": 0,
+          "y": 0
+        },
+        "role": "AXUnknown",
+        "width": 1128,
+        "x": 36,
+        "y": 69
+      }
+    },
+    {
+      "dark": false,
+      "label": "Red",
+      "active": true,
+      "key": true,
+      "native": {
+        "animationKeys": [],
+        "class": "NSGlassEffectView",
+        "glassStyle": 0,
+        "height": 148,
+        "hidden": false,
+        "id": "",
+        "label": "",
+        "object": "0x000000010aae6e50",
+        "opacity": 1,
+        "presentation": {
+          "height": 148,
+          "opacity": 1,
+          "translateX": 0,
+          "translateY": 0,
+          "width": 1128,
+          "x": 0,
+          "y": 0
+        },
+        "role": "AXUnknown",
+        "tint": [
+          1,
+          0,
+          0,
+          0.5019607843137255
+        ],
+        "width": 1128,
+        "x": 36,
+        "y": 69
+      }
+    },
+    {
+      "dark": true,
+      "label": "Blue",
+      "active": true,
+      "key": true,
+      "native": {
+        "animationKeys": [],
+        "class": "NSGlassEffectView",
+        "glassStyle": 0,
+        "height": 148,
+        "hidden": false,
+        "id": "",
+        "label": "",
+        "object": "0x000000010aae6e50",
+        "opacity": 1,
+        "presentation": {
+          "height": 148,
+          "opacity": 1,
+          "translateX": 0,
+          "translateY": 0,
+          "width": 1128,
+          "x": 0,
+          "y": 0
+        },
+        "role": "AXUnknown",
+        "tint": [
+          0,
+          0,
+          1,
+          0.5019607843137255
+        ],
+        "width": 1128,
+        "x": 36,
+        "y": 69
+      }
+    },
+    {
+      "dark": true,
+      "label": "Clear",
+      "active": true,
+      "key": true,
+      "native": {
+        "animationKeys": [],
+        "class": "NSGlassEffectView",
+        "glassStyle": 0,
+        "height": 148,
+        "hidden": false,
+        "id": "",
+        "label": "",
+        "object": "0x000000010aae6e50",
+        "opacity": 1,
+        "presentation": {
+          "height": 148,
+          "opacity": 1,
+          "translateX": 0,
+          "translateY": 0,
+          "width": 1128,
+          "x": 0,
+          "y": 0
+        },
+        "role": "AXUnknown",
+        "tint": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "width": 1128,
+        "x": 36,
+        "y": 69
+      }
+    },
+    {
+      "dark": true,
+      "label": "Default",
+      "active": true,
+      "key": true,
+      "native": {
+        "animationKeys": [],
+        "class": "NSGlassEffectView",
+        "glassStyle": 0,
+        "height": 148,
+        "hidden": false,
+        "id": "",
+        "label": "",
+        "object": "0x000000010aae6e50",
+        "opacity": 1,
+        "presentation": {
+          "height": 148,
+          "opacity": 1,
+          "translateX": 0,
+          "translateY": 0,
+          "width": 1128,
+          "x": 0,
+          "y": 0
+        },
+        "role": "AXUnknown",
+        "width": 1128,
+        "x": 36,
+        "y": 69
+      }
+    },
+    {
+      "dark": true,
+      "label": "Red",
+      "active": true,
+      "key": true,
+      "native": {
+        "animationKeys": [],
+        "class": "NSGlassEffectView",
+        "glassStyle": 0,
+        "height": 148,
+        "hidden": false,
+        "id": "",
+        "label": "",
+        "object": "0x000000010aae6e50",
+        "opacity": 1,
+        "presentation": {
+          "height": 148,
+          "opacity": 1,
+          "translateX": 0,
+          "translateY": 0,
+          "width": 1128,
+          "x": 0,
+          "y": 0
+        },
+        "role": "AXUnknown",
+        "tint": [
+          1,
+          0,
+          0,
+          0.5019607843137255
+        ],
+        "width": 1128,
+        "x": 36,
+        "y": 69
+      }
+    }
+  ]
+}
