@@ -1,0 +1,11 @@
+[package]
+name="nsh-material-smoke"
+version="0.0.0"
+edition="2024"
+[workspace]
+[features]
+materials=[]
+[dependencies]
+nsh-core={path="../../../crates/nsh-core", features=["svg"]}
+nsh-base={path="../../../crates/nsh-base"}
+nsh-platform-macos={path="../../../crates/nsh-platform-macos"}
