@@ -45,12 +45,12 @@ Completed after rebasing onto current upstream main:
 - Real Chromium: keyboard context menu and ordinary tap each passed. The upstream `nsh.js` with the same WASM failed the keyboard case, confirming the retained browser dispatch correction is still needed.
 - The real-browser test host drives a desktop mouse. Its long-press operation is not a touch input; the held-finger case therefore is not part of the newly added desktop-Chrome selection. The original full headless file remains unchanged and runs in CI.
 - Clippy core/base/engine/macOS all-targets with `-D warnings`: passed.
+- Paired compatibility checker: 32 passed with no ignored tests, including `checkout_apps_run` and both material-value tests. No historical releases are recorded in this checker repository.
 - Browser modules: 88 passed, 2 skipped, 1 bidi-link fixture failure. The same failure was reproduced at the earlier fixed baseline; it is not changed or suppressed here.
 
 Earlier-stage evidence, not presented as a rerun of the final rebased tree:
 
 - Full Gallery headless suite: 294 passed before the live-main rebase.
-- Paired checker: 32 passed, including `checkout_apps_run` and both material-value tests, before the live-main rebase. The fresh rebased result is reported in PR comments. No historical releases are recorded in this checker repository.
 
 Remote workflow state is reported separately in the PR comments; local evidence does not override required upstream gates.
 
