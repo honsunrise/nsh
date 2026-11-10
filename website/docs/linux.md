@@ -217,6 +217,14 @@ Shortcuts work with any keyboard layout (on a Cyrillic or Greek one, Ctrl+C is t
 A return that commits an input method's composition (Chinese, Japanese, ...) never submits. `onKeyPress` reports
 what React Native reports: the typed text, `"Enter"`, `"Backspace"`, and `"Escape"`; pasted text is not reported.
 
+Linux delivers a focused view's own input: a view that asks for the keyboard focus (`focusable(true)`) hears
+`.on_key_down(..)` and `.on_key_up(..)`, the wheel over it reaches `.on_wheel(..)`, and text committed to it reaches
+`.on_text_input(..)` / `.on_composition_change(..)`, with `.ime_cursor_area(..)` placing the candidate window (see
+[view events](../elements/index.md#keys-the-wheel-and-text-input)). `.capture_keys(..)` takes a press from typing and
+the platform's defaults; the app's `keymap` shortcuts run first, and a `passThrough` shortcut lets the view have its
+key. The headless test driver running a Linux desktop delivers the same events; an `Input` and the terminal keep their
+own key handling.
+
 Web views are WebKitGTK pages, drawn inside NSH's views: sheets, dialogs, toasts and views after them draw over a page,
 and parents clip it and fade it. Their website data (cookies, storage, the cache) is kept per app, under
 `~/.local/share/<app id>/webkit` and `~/.cache/<app id>/webkit`. The `webview` capability also applies to the pages of

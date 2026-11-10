@@ -4,6 +4,18 @@
 //! `onFocus` and `onBlur`, Return and Space press it, and Shift+F10 or the
 //! Menu key ask it for its context menu.
 //!
+//! One key controller per window, in GTK's capture phase, decides a press
+//! in this order: the app's shortcuts, the focused view's `KeyDown`
+//! (reported to the engine, never waited for) with its `capture_keys` rules
+//! ([`crate::keyboard`]), then the defaults of this module and, last, text
+//! through the input method. A view that hears raw keys runs the app's
+//! bindings itself, once ([`crate::keymap::raw`]), and its shortcut's
+//! action skips that press; other views leave the shortcuts to the
+//! `ShortcutController`, as before. A captured key is reported
+//! (`KeyEvent::captured`) and runs none of the defaults: no traversal,
+//! activation, context menu, text or scroll. A key that only listens runs
+//! them as before.
+//!
 //! Views stay unfocusable until Tab or `focus()` picks them: GTK also
 //! hands the focus around by itself (to the first focusable widget as a
 //! window maps, into a parent's children when a focused widget goes), and
@@ -85,9 +97,11 @@ pub(crate) fn blur(view: &NshView) -> bool {
 }
 
 /// Follows the focus of the surface's window, and takes the keys of a
-/// focused stop before the app's shortcuts and the focused widget's own
-/// (Space would scroll, Return would fire a global binding).
+/// focused stop: the app's shortcuts first, then the view's raw keys and
+/// capture rules, then the defaults of this module and text (see
+/// [`press`]).
 pub(crate) fn install(surface: &Rc<Surface>) {
+    crate::keyboard::install(surface);
     let weak = Rc::downgrade(surface);
     let installed = RefCell::new(glib::WeakRef::<gtk::Window>::new());
     surface.root.connect_realize(move |root| {
@@ -110,11 +124,56 @@ pub(crate) fn watch(surface: &Rc<Surface>, window: &gtk::Window) {
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     let pressed = Rc::downgrade(surface);
-    keys.connect_key_pressed(move |keys, key, _, modifiers| match pressed.upgrade() {
-        Some(surface) if key_pressed(&surface, keys, key, modifiers) => glib::Propagation::Stop,
-        _ => glib::Propagation::Proceed,
+    keys.connect_key_pressed(
+        move |keys, keyval, keycode, modifiers| match pressed.upgrade() {
+            Some(surface)
+                if press(
+                    &surface,
+                    keys.widget().as_ref(),
+                    keys.current_event().as_ref(),
+                    keyval,
+                    keycode,
+                    modifiers,
+                    crate::keyboard::layout(keys.current_event().as_ref()),
+                ) =>
+            {
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        },
+    );
+    let released = Rc::downgrade(surface);
+    keys.connect_key_released(move |keys, keyval, keycode, modifiers| {
+        if let Some(surface) = released.upgrade() {
+            let window = keys
+                .widget()
+                .and_then(|widget| widget.root())
+                .and_then(|root| root.downcast::<gtk::Window>().ok());
+            crate::keyboard::released(
+                &surface,
+                window.as_ref(),
+                keyval,
+                keycode,
+                modifiers,
+                crate::keyboard::layout(keys.current_event().as_ref()),
+                keys.current_event().as_ref(),
+            );
+        }
     });
     window.add_controller(keys);
+    // A window losing the OS focus loses the releases of the keys held in
+    // it (a focus move inside it does not).
+    let inactive = Rc::downgrade(surface);
+    window.connect_is_active_notify(move |window| {
+        let Some(surface) = inactive.upgrade() else {
+            return;
+        };
+        if window.is_active() {
+            crate::keyboard::window_activated(&surface, window);
+        } else {
+            crate::keyboard::window_deactivated(&surface, window);
+        }
+    });
     let weak = Rc::downgrade(surface);
     let current = RefCell::new(None::<NshView>);
     window.connect_focus_widget_notify(move |window| {
@@ -139,6 +198,9 @@ fn moved(surface: &Surface, window: &gtk::Window, current: &RefCell<Option<NshVi
         return;
     }
     let previous = current.replace(next.clone());
+    // The input method follows the focus before the view hears of it: a
+    // listener may set its cursor area as it arrives.
+    crate::keyboard::focus_changed(surface, window, next.as_ref());
     if let Some(view) = previous {
         view.set_focusable(false);
         crate::input::set_state(surface, &view, state::FOCUSED, false);
@@ -150,46 +212,146 @@ fn moved(surface: &Surface, window: &gtk::Window, current: &RefCell<Option<NshVi
     }
 }
 
-/// A key on its way to the focus: whether it was taken here.
-fn key_pressed(
+/// A key on its way to the focus: the app's shortcuts first (GTK's
+/// `ShortcutController` runs right after this, when the key is the app's),
+/// then the focused view's `KeyDown` and capture rules, then the defaults
+/// (Tab's traversal, Return and Space pressing, a context menu), and last
+/// text through the view's input method. True when the key is consumed.
+///
+/// A focused view whose ancestry hears none of the raw keys and captures
+/// none takes the original path: [`defaults`] alone, with no [`KeyEvent`]
+/// built and no per-key state.
+pub(crate) fn press(
     surface: &Rc<Surface>,
-    keys: &gtk::EventControllerKey,
-    key: gdk::Key,
+    widget: Option<&gtk::Widget>,
+    event: Option<&gdk::Event>,
+    keyval: gdk::Key,
+    keycode: u32,
     modifiers: gdk::ModifierType,
+    group: i32,
 ) -> bool {
-    if matches!(
-        key,
-        gdk::Key::Tab | gdk::Key::ISO_Left_Tab | gdk::Key::KP_Tab
-    ) {
-        // GTK moves the focus right after this, in the same dispatch.
-        TABBING.set(true);
-        glib::idle_add_local_once(|| TABBING.set(false));
-        return false;
-    }
-    // The focus of the window the key is going to.
-    let focus = keys.widget().and_then(|w| w.root()).and_then(|r| r.focus());
+    // A binding a previous press's raw dispatch reported must not leave its
+    // shortcut's action silent (`keymap::raw`).
+    crate::keymap::forget(surface);
+    // A modifier's press is tracked even when nothing raw has the focus (a
+    // native field, no focus): the next key event carries it.
+    crate::keyboard::track_modifiers(surface, keyval, keycode, true);
+    // The window the key is going to, and its focus.
+    let root = widget.and_then(|widget| widget.root());
+    let window = root
+        .as_ref()
+        .and_then(|root| root.clone().downcast::<gtk::Window>().ok());
+    let focus = root.and_then(|root| root.focus());
     let Some(view) = focused_stop(surface, focus) else {
+        if is_tab(keyval) && !event.is_some_and(|event| crate::keymap::claims(surface, event)) {
+            arm_tab();
+        }
         return false;
     };
-    // The app's bindings come first (a menu's trigger opens at its first
-    // item with Return): the shortcut controller runs right after this.
-    if keys
-        .current_event()
-        .is_some_and(|event| crate::keymap::claims(surface, &event))
-    {
+    if !crate::keyboard::listens(&view) {
+        // A view with no raw keys: the app's shortcuts are the shortcut
+        // controller's, as they always were (a menu's trigger opens at its
+        // first item with Return, and the controller runs right after this).
+        if event.is_some_and(|event| crate::keymap::claims(surface, event)) {
+            return false;
+        }
+        return defaults(surface, &view, keyval, modifiers);
+    }
+    // A raw view runs the app's bindings itself, once, before it is
+    // notified: a pass-through binding reports and the key goes on, a
+    // consuming one reports and takes it, and the shortcut controller does
+    // not report either again.
+    let repeat = window
+        .as_ref()
+        .is_some_and(|window| crate::keyboard::held(surface, window, keycode));
+    if let Some(event) = event {
+        match crate::keymap::raw(surface, event, repeat) {
+            crate::keymap::RawFire::Consumed => return true,
+            crate::keymap::RawFire::None | crate::keymap::RawFire::Passed => {}
+        }
+    }
+    // A key the layout cannot name (a dead key) is still a `KeyDown`
+    // (`Unidentified`), so a capture that takes every key gets it; with no
+    // capture it goes on to the input method below.
+    let mut key_event = crate::keyboard::key_event(
+        surface,
+        &view,
+        keyval,
+        keycode,
+        modifiers,
+        crate::keyboard::KeyPhase::Down { repeat },
+        group,
+    );
+    let captured = crate::keyboard::captures(&view, &key_event);
+    key_event.captured = captured;
+    crate::keyboard::notify(surface, &view, key_event);
+    if captured {
+        // The view took the key: no traversal, activation, context menu,
+        // text or scroll.
+        return true;
+    }
+    // A composition has the keys before the defaults: Return commits it
+    // instead of pressing the view, Escape cancels it, arrows and digits
+    // pick candidates. It is offered each key once; a key it refuses goes
+    // on to the defaults.
+    let mut offered = false;
+    if crate::keyboard::composing(surface, &view) {
+        offered = true;
+        if crate::keyboard::text(surface, &view, keycode, event) {
+            return true;
+        }
+    }
+    if is_tab(keyval) {
+        // GTK moves the focus right after this, in the same dispatch.
+        return defaults(surface, &view, keyval, modifiers);
+    }
+    if defaults(surface, &view, keyval, modifiers) {
+        return true;
+    }
+    if offered {
+        return false;
+    }
+    crate::keyboard::text(surface, &view, keycode, event)
+}
+
+/// Whether `keyval` is a Tab (the app's traversal).
+fn is_tab(keyval: gdk::Key) -> bool {
+    matches!(
+        keyval,
+        gdk::Key::Tab | gdk::Key::ISO_Left_Tab | gdk::Key::KP_Tab
+    )
+}
+
+fn arm_tab() {
+    TABBING.set(true);
+    glib::idle_add_local_once(|| TABBING.set(false));
+}
+
+/// The defaults of a focused stop: Tab's traversal, a context menu on
+/// Shift+F10 or the Menu key, and Return and Space pressing a view that
+/// takes presses. True when one consumed the key.
+fn defaults(
+    surface: &Rc<Surface>,
+    view: &NshView,
+    keyval: gdk::Key,
+    modifiers: gdk::ModifierType,
+) -> bool {
+    if is_tab(keyval) {
+        // Only a Tab left to GTK may offer the stops for traversal.
+        arm_tab();
         return false;
     }
     let held = crate::input::modifiers(modifiers);
-    let function = (key == gdk::Key::F10).then_some(Key::F(10));
-    if core_input::opens_context_menu(key == gdk::Key::Menu, function, held) {
-        return show_context_menu(surface, &view);
+    let function = (keyval == gdk::Key::F10).then_some(Key::F(10));
+    if core_input::opens_context_menu(keyval == gdk::Key::Menu, function, held) {
+        return show_context_menu(surface, view);
     }
     let activates = matches!(
-        key,
+        keyval,
         gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter | gdk::Key::space
     ) && !(held.ctrl || held.alt || held.cmd);
     if activates && view.state().events.contains(EventKind::Press) {
-        crate::input::activate(surface, &view);
+        crate::input::activate(surface, view);
         return true;
     }
     false
@@ -234,7 +396,11 @@ fn show_context_menu(surface: &Surface, view: &NshView) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use nsh_core::{EventMask, MountItem, ROOT_ID};
+    use nsh_core::{
+        EventMask, KeyCapture, KeyEvent, MountItem, NamedKey, NodeId, ROOT_ID, ViewProps,
+        keymap::{Keystroke, Modifiers},
+        platform::Os,
+    };
 
     use super::*;
     use crate::gtk_test::{apply, frame, run, show, surface, view, wait_until};
@@ -269,6 +435,408 @@ mod tests {
         TABBING.set(true);
         window.child_focus(gtk::DirectionType::TabForward);
         TABBING.set(false);
+    }
+
+    /// `props` of `id`, changed as `edit` says.
+    fn props(surface: &Rc<Surface>, id: NodeId, edit: impl FnOnce(&mut ViewProps)) {
+        let mut props = view(surface, id).state().props.clone();
+        edit(&mut props);
+        apply(surface, &[MountItem::ViewProps { id, props }]);
+    }
+
+    /// The display's keycode for `key`.
+    fn keycode(key: gdk::Key) -> u32 {
+        gdk::Display::default()
+            .and_then(|display| display.map_keyval(key))
+            .and_then(|keys| keys.first().map(|key| key.keycode()))
+            .expect("a keycode")
+    }
+
+    /// A key event of `key`.
+    fn key_event(key: nsh_core::Key) -> KeyEvent {
+        KeyEvent::new(key, None, Modifiers::default(), 0, false)
+    }
+
+    #[test]
+    fn a_capture_takes_the_key_before_the_defaults() {
+        run(|| {
+            let surface = surface();
+            views(&surface);
+            let window = show(&surface);
+            let (first, plain, last) = (view(&surface, 2), view(&surface, 3), view(&surface, 4));
+            assert!(wait_until(|| first.is_mapped()));
+            // The plain view becomes a stop that only listens to keys.
+            props(&surface, 3, |props| props.focusable = Some(true));
+            focus(&plain);
+            assert!(plain.is_focus());
+            // Listening does not consume: Tab is still GTK's traversal and
+            // Space is still the platform's.
+            assert!(!press(
+                &surface,
+                Some(window.upcast_ref()),
+                None,
+                gdk::Key::space,
+                keycode(gdk::Key::space),
+                gdk::ModifierType::empty(),
+                0,
+            ));
+            assert!(!press(
+                &surface,
+                Some(window.upcast_ref()),
+                None,
+                gdk::Key::Tab,
+                keycode(gdk::Key::Tab),
+                gdk::ModifierType::empty(),
+                0,
+            ));
+            tab(&window);
+            assert!(last.is_focus(), "an uncaptured Tab still moves the focus");
+            // A capture consumes the key here, before GTK's traversal.
+            focus(&first);
+            assert!(first.is_focus());
+            props(&surface, 2, |props| props.key_capture = KeyCapture::All);
+            assert!(press(
+                &surface,
+                Some(window.upcast_ref()),
+                None,
+                gdk::Key::Tab,
+                keycode(gdk::Key::Tab),
+                gdk::ModifierType::empty(),
+                0,
+            ));
+            assert!(first.is_focus(), "a captured Tab is no traversal");
+            assert!(
+                !TABBING.get(),
+                "a captured Tab must not arm another window's focus"
+            );
+            // The capture follows the mounted props.
+            props(&surface, 2, |props| props.key_capture = KeyCapture::None);
+            assert!(!press(
+                &surface,
+                Some(window.upcast_ref()),
+                None,
+                gdk::Key::Tab,
+                keycode(gdk::Key::Tab),
+                gdk::ModifierType::empty(),
+                0,
+            ));
+            window.child_focus(gtk::DirectionType::TabForward);
+            assert!(plain.is_focus());
+            assert!(wait_until(|| !TABBING.get()));
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn capture_walks_enabled_ancestors_only() {
+        run(|| {
+            let surface = surface();
+            apply(
+                &surface,
+                &[
+                    MountItem::Create {
+                        id: 2,
+                        kind: ViewKind::View,
+                    },
+                    MountItem::Insert {
+                        parent: ROOT_ID,
+                        child: 2,
+                        before: None,
+                    },
+                    MountItem::Create {
+                        id: 3,
+                        kind: ViewKind::View,
+                    },
+                    MountItem::Insert {
+                        parent: 2,
+                        child: 3,
+                        before: None,
+                    },
+                    MountItem::Frame {
+                        id: 2,
+                        frame: frame(0.0, 0.0, 100.0, 80.0),
+                    },
+                    MountItem::Frame {
+                        id: 3,
+                        frame: frame(0.0, 0.0, 100.0, 40.0),
+                    },
+                ],
+            );
+            let escape = Keystroke::parse("escape", Os::Linux).expect("a stroke");
+            props(&surface, 2, |props| {
+                props.key_capture = KeyCapture::keys([escape]);
+            });
+            let child = view(&surface, 3);
+            let mut events = EventMask::default();
+            events.set(EventKind::KeyDown, true);
+            apply(&surface, &[MountItem::Events { id: 2, events }]);
+            assert!(
+                crate::keyboard::listens(&child),
+                "an ancestor's raw listener reaches the child"
+            );
+            let event = key_event(nsh_core::Key::Named(NamedKey::Escape));
+            assert!(crate::keyboard::captures(&child, &event));
+            assert!(!crate::keyboard::captures(
+                &child,
+                &key_event(nsh_core::Key::Named(NamedKey::Enter))
+            ));
+            // A disabled view captures nothing.
+            props(&surface, 2, |props| {
+                props.accessibility.state.disabled = true;
+            });
+            assert!(!crate::keyboard::captures(&child, &event));
+        });
+    }
+
+    #[test]
+    fn every_key_capture_takes_an_unidentified_key_and_none_lets_it_go() {
+        run(|| {
+            let surface = surface();
+            views(&surface);
+            // The view stays a stop (it takes presses) and hears the raw
+            // keys, so a press takes the raw path.
+            let mut events = EventMask::default();
+            events.set(EventKind::Press, true);
+            events.set(EventKind::KeyDown, true);
+            apply(&surface, &[MountItem::Events { id: 2, events }]);
+            let window = show(&surface);
+            let first = view(&surface, 2);
+            assert!(wait_until(|| first.is_mapped()));
+            focus(&first);
+            assert!(first.is_focus());
+            // A keycode with no keymap entry is `Unidentified`, with its
+            // hardware code kept and no text.
+            let event = crate::keyboard::key_event(
+                &surface,
+                &first,
+                gdk::Key::VoidSymbol,
+                0,
+                gdk::ModifierType::empty(),
+                crate::keyboard::KeyPhase::Down { repeat: false },
+                0,
+            );
+            assert_eq!(event.key, nsh_core::Key::Named(NamedKey::Unidentified));
+            assert_eq!(event.physical, 0);
+            assert!(event.text.is_none());
+            // `All` takes it before the defaults and the input method.
+            props(&surface, 2, |props| props.key_capture = KeyCapture::All);
+            assert!(press(
+                &surface,
+                Some(window.upcast_ref()),
+                None,
+                gdk::Key::VoidSymbol,
+                0,
+                gdk::ModifierType::empty(),
+                0,
+            ));
+            // `None` leaves it to the platform and the input method.
+            props(&surface, 2, |props| props.key_capture = KeyCapture::None);
+            assert!(!press(
+                &surface,
+                Some(window.upcast_ref()),
+                None,
+                gdk::Key::VoidSymbol,
+                0,
+                gdk::ModifierType::empty(),
+                0,
+            ));
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn a_tab_press_arms_the_traversal_without_focus() {
+        run(|| {
+            let surface = surface();
+            views(&surface);
+            let window = show(&surface);
+            let first = view(&surface, 2);
+            assert!(wait_until(|| first.is_mapped()));
+            assert!(GtkWindowExt::focus(&window).is_none());
+            // The press itself arms GTK's traversal (the stops are
+            // focusable only while it moves the focus): no test helper.
+            assert!(!press(
+                &surface,
+                Some(window.upcast_ref()),
+                None,
+                gdk::Key::Tab,
+                keycode(gdk::Key::Tab),
+                gdk::ModifierType::empty(),
+                0,
+            ));
+            window.child_focus(gtk::DirectionType::TabForward);
+            assert!(first.is_focus(), "Tab from nothing enters the first stop");
+            assert!(wait_until(|| !TABBING.get()));
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn a_key_up_returns_to_the_view_it_went_down_on() {
+        run(|| {
+            let surface = surface();
+            views(&surface);
+            let window = show(&surface);
+            let (first, last) = (view(&surface, 2), view(&surface, 4));
+            assert!(wait_until(|| first.is_mapped()));
+            focus(&first);
+            assert!(first.is_focus());
+            assert!(!crate::keyboard::held(&surface, &window, 9));
+            crate::keyboard::notify(
+                &surface,
+                &first,
+                crate::keyboard::key_event(
+                    &surface,
+                    &first,
+                    gdk::Key::Escape,
+                    9,
+                    gdk::ModifierType::empty(),
+                    crate::keyboard::KeyPhase::Down { repeat: false },
+                    0,
+                ),
+            );
+            assert!(crate::keyboard::held_key(&surface, 9));
+            assert_eq!(crate::keyboard::down_target(&surface, 9), Some(2));
+            // The focus moves while the key is held: it is not released,
+            // and its key up still returns to the view it went down on.
+            focus(&last);
+            assert!(last.is_focus());
+            assert!(
+                crate::keyboard::held_key(&surface, 9),
+                "a focus move is no release"
+            );
+            assert_eq!(crate::keyboard::down_target(&surface, 9), Some(2));
+            // Its auto-repeat goes down on the new focus, but keeps the
+            // original target for the key up.
+            crate::keyboard::notify(
+                &surface,
+                &last,
+                crate::keyboard::key_event(
+                    &surface,
+                    &last,
+                    gdk::Key::Escape,
+                    9,
+                    gdk::ModifierType::empty(),
+                    crate::keyboard::KeyPhase::Down { repeat: true },
+                    0,
+                ),
+            );
+            assert_eq!(crate::keyboard::down_target(&surface, 9), Some(2));
+            // The release ends the hold.
+            crate::keyboard::released(
+                &surface,
+                Some(&window),
+                gdk::Key::Escape,
+                9,
+                gdk::ModifierType::empty(),
+                0,
+                None,
+            );
+            assert!(!crate::keyboard::held_key(&surface, 9));
+            assert_eq!(crate::keyboard::down_target(&surface, 9), None);
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn the_fast_path_follows_the_mounted_events_and_capture() {
+        run(|| {
+            let surface = surface();
+            views(&surface);
+            let plain = view(&surface, 3);
+            assert!(!crate::keyboard::listens(&plain));
+            let mut events = EventMask::default();
+            events.set(EventKind::KeyDown, true);
+            apply(&surface, &[MountItem::Events { id: 3, events }]);
+            assert!(crate::keyboard::listens(&plain), "a raw key listener");
+            events.set(EventKind::KeyDown, false);
+            apply(&surface, &[MountItem::Events { id: 3, events }]);
+            assert!(!crate::keyboard::listens(&plain));
+            props(&surface, 3, |props| {
+                props.key_capture = KeyCapture::keys([]);
+            });
+            assert!(
+                !crate::keyboard::listens(&plain),
+                "an empty capture takes no key"
+            );
+            props(&surface, 3, |props| props.key_capture = KeyCapture::All);
+            assert!(crate::keyboard::listens(&plain), "a capture policy");
+        });
+    }
+
+    #[test]
+    fn the_input_method_follows_the_focused_view() {
+        run(|| {
+            let surface = surface();
+            apply(
+                &surface,
+                &[
+                    MountItem::Create {
+                        id: 2,
+                        kind: ViewKind::View,
+                    },
+                    MountItem::Insert {
+                        parent: ROOT_ID,
+                        child: 2,
+                        before: None,
+                    },
+                    MountItem::Create {
+                        id: 3,
+                        kind: ViewKind::View,
+                    },
+                    MountItem::Insert {
+                        parent: ROOT_ID,
+                        child: 3,
+                        before: None,
+                    },
+                    MountItem::Frame {
+                        id: 2,
+                        frame: frame(0.0, 0.0, 100.0, 40.0),
+                    },
+                    MountItem::Frame {
+                        id: 3,
+                        frame: frame(0.0, 40.0, 100.0, 40.0),
+                    },
+                ],
+            );
+            let (first, second) = (view(&surface, 2), view(&surface, 3));
+            for id in [2, 3] {
+                props(&surface, id, |props| props.focusable = Some(true));
+            }
+            let mut events = EventMask::default();
+            events.set(EventKind::TextInput, true);
+            apply(&surface, &[MountItem::Events { id: 2, events }]);
+            let window = show(&surface);
+            assert!(wait_until(|| first.is_mapped()));
+            assert!(!crate::keyboard::ime_attached(&surface));
+            focus(&first);
+            assert!(first.is_focus());
+            assert!(
+                wait_until(|| crate::keyboard::ime_attached(&surface)),
+                "attached to the view that hears text"
+            );
+            props(&surface, 2, |props| {
+                props.accessibility.state.disabled = true
+            });
+            assert!(
+                !crate::keyboard::ime_attached(&surface),
+                "a disabled view stops composing"
+            );
+            props(&surface, 2, |props| {
+                props.accessibility.state.disabled = false
+            });
+            assert!(
+                crate::keyboard::ime_attached(&surface),
+                "the focused view can type again"
+            );
+            focus(&second);
+            assert!(second.is_focus());
+            assert!(
+                wait_until(|| !crate::keyboard::ime_attached(&surface)),
+                "detached when the focus leaves"
+            );
+            window.destroy();
+        });
     }
 
     #[test]

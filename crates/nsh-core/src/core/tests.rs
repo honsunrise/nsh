@@ -21778,6 +21778,65 @@ fn mouse_moves_reach_rust_listeners_with_their_positions_modifiers_and_buttons()
 }
 
 #[test]
+fn retained_views_clear_omitted_capture_and_ime_props() {
+    use crate::prelude::*;
+
+    #[component]
+    fn Configured() -> impl IntoElement {
+        let configured = signal(true);
+        view()
+            .on_press(move || configured.set(false))
+            .child(dynamic(move || {
+                view().key("pad").when(configured.get(), |view| {
+                    view.capture_keys(KeyCapture::All)
+                        .ime_cursor_area(Bounds::new(
+                            point(px(8.0), px(24.0)),
+                            size(px(1.0), px(18.0)),
+                        ))
+                })
+            }))
+    }
+
+    let mut c = core();
+    c.mount_root(&crate::element::Root::of::<Configured>());
+    let initial = c.commit().unwrap();
+    let trigger = initial
+        .items
+        .iter()
+        .find_map(|item| match item {
+            MountItem::Events { id, events } if events.contains(EventKind::Press) => Some(*id),
+            _ => None,
+        })
+        .unwrap();
+    let pad = initial
+        .items
+        .iter()
+        .find_map(|item| match item {
+            MountItem::ViewProps { id, props } if props.key_capture == KeyCapture::All => {
+                assert!(props.ime_cursor_area.is_some());
+                Some(*id)
+            }
+            _ => None,
+        })
+        .unwrap();
+    c.component_event(trigger, EventKind::Press, &EventPayload::None);
+    let changed = c.commit().unwrap();
+    assert!(!changed.items.iter().any(|item| matches!(item,
+        MountItem::Delete { id } if *id == pad
+    )));
+    let cleared = changed
+        .items
+        .iter()
+        .find_map(|item| match item {
+            MountItem::ViewProps { id, props } if *id == pad => Some(props),
+            _ => None,
+        })
+        .expect("omitted props must clear the retained native view");
+    assert_eq!(cleared.key_capture, KeyCapture::None);
+    assert_eq!(cleared.ime_cursor_area, None);
+}
+
+#[test]
 fn context_menus_reach_rust_listeners_with_their_positions() {
     use crate::prelude::*;
     #[component]

@@ -7,11 +7,16 @@ JS (engine thread, QuickJS)  the app's components on the native reactive graph; 
 nsh-js                        the renderer decodes each change from its JS values (tags, style objects, event names) -> Op, queued natively
 nsh-core (engine thread)      apply(Op) maintains the shadow tree -> commit(): render components, rebuild text, Taffy layout, diff frames -> MountBatch
 Platform (main thread)       one main-queue hop per commit, applying MountItems to native views in order
-Input                        native gestures -> EngineControl::dispatch_event -> engine thread -> JS handler
+Input                        native gestures, and a Linux view's raw keys/wheel/text -> EngineControl::dispatch_event -> engine thread -> listeners
 ```
 
 - The platform main thread never waits for JS (one bounded exception: macOS waits up to 16 ms for the layout at a new
   window size, `macos.md`).
+- **Raw view input does not wait either**: a focused Linux view's key down and up, wheel and committed text are
+  ordinary events with typed payloads (`EventPayload::Key` / `Wheel` / `TextInput`; preedit keeps its map), and the
+  mounted `ViewProps::key_capture` alone decides whether a press is taken from text and the platform's defaults. The
+  platform has already typed, scrolled or moved the focus by the time a listener runs, so a slow callback delays later
+  engine work only; no reply, timeout or cancellation crosses back.
 - **Reactivity is native**: signals, memos, effects, owners and context are a graph in Rust (`crates/nsh-js/src/reactive.rs`). Apps reach it through `nsh` (`signal`, `computed`, `effect`, ...).
 - **The runtime is native** (`native-pipeline.md`): a bundle is one ES module of the app's code importing NSH's native
   modules (`nsh`, `nsh:rt`, `nsh/*`, `js-modules.md`). The renderer pushes ops straight into the host's queue; one JS

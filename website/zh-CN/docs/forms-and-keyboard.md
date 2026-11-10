@@ -121,6 +121,8 @@ mount(App);
 
 中文、日文、韩文输入法先组字再上屏：拼音在选字后变成“腾”。`onCompositionChange`（Rust 的 `.on_composition_change(..)`） 随组字报告其状态：用户输入时为 `{ composing: true, text: "teng" }`，结束时为 `{ composing: false, text: "" }`；上屏的文本先经 `onChange` 报告，然后才报告结束。在 iOS、Android、macOS 和 Web 上，系统把正在组的字放在输入框里，`onChange` 也会报告它；在 Windows、Linux 和 GPUI 上，`onChange` 报告上屏后的文本。受控输入框无论应用如何处理值，组字都会继续：用户组字时设置的 `value` 在组字结束后显示，因此转大写或过滤文本的输入框也能正常输入拼音。
 
+不是输入框的视图在获得键盘焦点时也能接收文字：`.on_text_input(..)` 接收上屏的文本，`.on_composition_change(..)` 接收预编辑，`.ime_cursor_area(Bounds<Points>)` 放置候选窗口。Linux 窗口和以 Linux 桌面运行的无头测试驱动会投递它们（见[视图事件](../elements/index.md#按键滚轮和文本输入)）。
+
 只搜索上屏文本的搜索框：
 
 ```rust tabs
@@ -362,7 +364,7 @@ mount(SignIn);
 | `set_selection(start, end)` | `setSelection(start, end?)` | 选中 `start..end`（UTF-16 码元）；两者相等时为光标（TSX：不传 `end`）。 |
 | `insert_text(text)` | `insertText(text)` | 以用户编辑的方式用 `text` 替换选区：是输入框撤销历史中的一步，由 `onChange` 报告；目前只在 Linux、Web 和无头测试中生效（[粘贴](#粘贴图片和文件)）。 |
 
-在 macOS 和 Web 上，可按压视图的 ref 的 `focus()` 和 `blur()` 也会像 Tab 一样移动键盘焦点（[键盘焦点](../elements/index.md#键盘焦点)）。
+在 macOS、Web 和 Linux 上，可按压视图的 ref 的 `focus()` 和 `blur()` 也会像 Tab 一样移动键盘焦点（[键盘焦点](../elements/index.md#键盘焦点)）。
 
 Rust 中的 `dismiss_keyboard()` 和 TSX 中 `nsh` 的 `Keyboard.dismiss()` 让当前拥有焦点的输入框失去焦点：
 

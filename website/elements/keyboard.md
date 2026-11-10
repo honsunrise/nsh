@@ -201,6 +201,51 @@ The height is the part of the keyboard that overlaps the NSH surface. When the w
 > To keep content above the keyboard, `env(keyboard-inset-height)` is the simpler form: it animates with the keyboard
 > natively, without running code.
 
+## Hardware keys on a focused view
+
+A view that takes the keyboard focus ([`focusable`](./index.md#keyboard-focus), `true` for views that take presses)
+hears the window's keys while it is focused: `.on_key_down(..)` with a `KeyEvent`, and `.on_key_up(..)`. A key down
+notifies the focused view and every ancestor that listens; a handler returns nothing, and what one view does never
+keeps another from hearing the press.
+
+Key-up notifications return to the original press target while the window remains active. Window deactivation clears
+held-key tracking; applications keeping their own held-key state can clear it on the window's focus-change event too.
+
+`.capture_keys(..)` takes a press from typing and from the platform's defaults: `KeyCapture::All` for every key, or
+`KeyCapture::keys([..])` for named `keymap` keystrokes. The focused view and its enabled ancestors may capture, as
+the mounted value says, so a view that is removed or disabled no longer takes a key. `KeyCapture::All` includes Tab,
+and naming Tab takes the traversal; a view that only listens leaves Tab, Return, Space and scrolling to the platform.
+A taken press reaches the notification with `captured` set and types nothing. A focused `Input` keeps its native
+typing, so a capture around it does not take its keys.
+
+The app's `keymap` keeps its place ahead of the view: an eligible shortcut fires before a capture, and a shortcut with
+`passThrough: true` reports its key and lets the view and the platform have it. After the shortcuts come the focused
+view and its ancestors' notifications with their capture rules, then text and the platform's defaults. A focused view
+that takes presses keeps Return and Space for its activation; a capture names those keys to take them.
+
+The same view takes text with `.on_text_input(..)` and an input method's preedit with `.on_composition_change(..)`, and
+places the candidate window with `.ime_cursor_area(Bounds<Points>)` (see
+[view events](./index.md#keys-the-wheel-and-text-input)).
+
+During an active composition, an uncaptured key reaches the input method before ordinary activation, so Return commits
+the composition. This also applies to a view that listens only for committed text.
+
+```rust
+// A canvas that takes every key while it is focused.
+view()
+    .focusable(true)
+    .capture_keys(KeyCapture::All)
+    .on_key_down(move |e: &KeyEvent| {
+        if e.key == Key::Named(NamedKey::Escape) {
+            close();
+        }
+    })
+```
+
+> [!NOTE]
+> These events belong to Rust views. Linux windows and the headless test driver running a Linux desktop deliver them;
+> an `Input` keeps its own typing, and the terminal idiom keeps its own keys.
+
 ## Platform notes
 
 - **iOS**: the room animates with the keyboard's own duration and an ease-in-ease-out curve.

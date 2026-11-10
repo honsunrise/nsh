@@ -96,6 +96,12 @@ markup on the web (`web={{ element }}`), the
 gesture props (`pan`, `pinch`, `rotation` and their events), the touch and responder props, the accessibility props
 and `ios` / `android` / `desktop`.
 
+Linux windows, and the headless test driver running a Linux desktop, let a `focusable` view take the keyboard focus
+and deliver its own key, wheel and text events to it: `.on_key_down(..)`, `.on_key_up(..)`, `.on_wheel(..)`,
+`.on_text_input(..)`, `.on_composition_change(..)`, `.ime_cursor_area(Bounds<Points>)` and `.capture_keys(..)`, which
+takes a press from typing and the platform's defaults (`KeyCapture`). They belong to Rust views (see
+[view events](./index.md#keys-the-wheel-and-text-input)).
+
 ## Selectable views
 
 With `selectable`, a selection runs across the [`Text`](./text.md) elements and [`TextView`](./text-view.md)s inside

@@ -99,6 +99,44 @@ pub(super) fn payload(host: &Bindings, payload: &EventPayload) -> Result<Value, 
                 .collect::<Result<Vec<_>, _>>()?,
         )?,
         EventPayload::Layout(b) => object([("bounds", bounds(*b)?)])?,
+        // Raw View input has typed Rust listeners, not TSX event props; the
+        // wire fallback stays exhaustive.
+        EventPayload::Key(e) => {
+            let out = object([
+                ("key", Value::string(e.key.name())?),
+                ("modifiers", modifiers(&e.modifiers)?),
+                ("physical", number(e.physical)),
+                ("repeat", boolean(e.repeat)),
+                ("captured", boolean(e.captured)),
+            ])?;
+            if let Some(text) = &e.text {
+                out.set("text", &Value::string(text.as_str())?)?;
+            }
+            out
+        }
+        EventPayload::Wheel(e) => {
+            let delta = Value::object()?;
+            let mode = match e.delta {
+                nsh_core::WheelDelta::Lines(d) => {
+                    delta.set("x", &number(d.x))?;
+                    delta.set("y", &number(d.y))?;
+                    "lines"
+                }
+                nsh_core::WheelDelta::Points(d) => {
+                    delta.set("x", &number(d.x.0))?;
+                    delta.set("y", &number(d.y.0))?;
+                    "points"
+                }
+            };
+            object([
+                ("position", point(e.position)?),
+                ("pagePosition", point(e.page_position)?),
+                ("delta", delta),
+                ("mode", Value::string(mode)?),
+                ("modifiers", modifiers(&e.modifiers)?),
+            ])?
+        }
+        EventPayload::TextInput(e) => object([("text", Value::string(e.text.as_str())?)])?,
         EventPayload::Press(p) => object([
             ("position", point(p.position)?),
             ("pagePosition", point(p.page_position)?),

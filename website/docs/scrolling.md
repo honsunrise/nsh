@@ -94,6 +94,13 @@ Right to left (see [Device and environment](./device-and-environment.md#right-to
 
 Fingers drag scroll views. On the desktop (macOS, Windows, Linux) and in the browser, the mouse scrolls as in desktop apps: with its wheel (Shift + wheel scrolls horizontally), the touchpad, the keyboard and the scroll indicator, which shows while the mouse moves over the view and drags as a scroll bar; mouse drags go to the app's pans, responders and text selection. Touchscreens on desktops drag scroll views as fingers do. `scrollbar={false}` hides the indicator on either axis: a mouse without a horizontal wheel moves a horizontal view with Shift + wheel, with the wheel where nothing around it scrolls vertically, and with the keyboard.
 
+An app can hear the wheel over a view with `.on_wheel(..)`: the innermost enabled view under the pointer that listens
+takes it, so the scroll views around it do not scroll; with no listener, the nearest scroll view scrolls. The
+`WheelEvent` has `position` in the view, `pagePosition` in the root, `modifiers` and `delta`, a `WheelDelta`:
+`Lines(Point<f32>)` counts a stepping wheel's lines and `Points(Point<Points>)` a touchpad's points, positive `y`
+scrolling down ([`view events`](../elements/index.md#keys-the-wheel-and-text-input)). A hosted native view and the
+topmost dialog hear the wheel first. Linux windows and the headless test driver running a Linux desktop deliver it.
+
 ### Behavior props
 
 | Prop | Rust | Type | Default | Description |

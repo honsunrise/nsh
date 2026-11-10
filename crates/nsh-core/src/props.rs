@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::{
+    Bounds,
     element::PropEnum,
     geometry::{Edges, Points, px},
     js::host::HostProps,
@@ -373,6 +374,14 @@ pub struct ViewProps {
     /// keys); `Some(false)` keeps a view that takes presses out; `None`, the
     /// default, leaves it to the presses ([`ViewProps::focus_stop`]).
     pub focusable: Option<bool>,
+    /// Keys consumed by this view or a focused descendant before native
+    /// defaults run. Linux decides from the mounted rules without waiting
+    /// for a listener (`Interactive::capture_keys`).
+    pub key_capture: crate::KeyCapture,
+    /// `imeCursorArea`: where an input method shows its candidate window
+    /// while the view has the keyboard focus, in the view's coordinates
+    /// (`on_text_input`).
+    pub ime_cursor_area: Option<Bounds<Points>>,
     /// The view is a selectable view (`View`'s `selectable`): the
     /// texts in its subtree that are not `selectable={false}` share one
     /// selection, from text to text ([`crate::selection`]); an area inside
@@ -398,9 +407,9 @@ impl ViewProps {
     /// keymap while it has the focus), and a view needs no press handler to
     /// be focusable, which would take the presses of a pressable around it
     /// (a chart in a card that opens a page). The platforms that move the
-    /// keyboard focus between views (macOS, the web, the headless driver)
-    /// all decide with this; inputs that edit are stops by their own rule,
-    /// and each platform adds what it knows of visibility.
+    /// keyboard focus between views (macOS, the web, Linux and the headless
+    /// driver) all decide with this; inputs that edit are stops by their
+    /// own rule, and each platform adds what it knows of visibility.
     pub fn focus_stop(&self, takes_presses: bool) -> bool {
         self.focusable.unwrap_or(takes_presses) && !self.accessibility.state.disabled
     }

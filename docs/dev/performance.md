@@ -4,6 +4,20 @@ Performance is the project's first priority; the rules are in `AGENTS.md`. Chang
 after `nsh test --trace` timings and item counts (`nsh trace` before it, in the records below). Current baselines
 (Apple Silicon except where noted):
 
+Raw Linux view input (Linux x86_64, debug, against `b5890efa`):
+`printf 'await app.press("+1");\n' | nsh test examples/counter/App.tsx --trace`, one fresh process per revision.
+The counter has no raw-input listeners. Its work counts stay unchanged:
+
+| Phase | Before (µs/commit) | After (µs/commit) | Ops | Mount items | Nodes |
+|---|---:|---:|---:|---:|---:|
+| Initial frame | 498 | 894 | 57 | 51 | 21 |
+| Press `+1` | 889 | 587 | 10 | 7 | 24 |
+
+These single-run timings are a smoke control, not a speed comparison. Native XTest input on a custom Rust view
+also kept a GTK 100 ms timer running while its key-down listener slept for 1,250 ms (12–13 timer callbacks during
+the sleep). The captured key generated no text; an uncaptured key did. Capture is decided from mounted props and
+reported through the ordinary asynchronous event channel, with no engine reply or timeout.
+
 Retained RichEditor rows (2026-11-08 audit, Linux x86_64, against `058a745a`; dev/test profile with
 `nsh-core` and `nsh-base` at `opt-level=3`, `ApproxTextEngine`). Editing the visible first paragraph with content
 culling enabled, 80 ASCII characters per paragraph, both Core order checks applied together:

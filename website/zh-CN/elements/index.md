@@ -311,7 +311,7 @@ import { Menu } from "nsh/desktop";
 
 ### 键盘焦点
 
-在 macOS 和 Web 上，Tab 按视图树的顺序在停靠点之间移动键盘焦点：输入框、可按压的视图，以及所有设置了 `focusable` 的视图。焦点样式（`focus:`、`.focus(..)`）为获得焦点的视图设置样式；它可按压时，按 Return 或空格会按下它。点击会按下视图但不让它获得焦点，所以焦点样式只在键盘聚焦时生效。
+在 macOS、Linux 和 Web 上，Tab 按视图树的顺序在停靠点之间移动键盘焦点：输入框、可按压的视图，以及所有设置了 `focusable` 的视图。焦点样式（`focus:`、`.focus(..)`）为获得焦点的视图设置样式；它可按压时，按 Return 或空格会按下它。点击会按下视图但不移动键盘焦点，所以焦点样式只在键盘聚焦时生效。
 
 焦点和按压相互独立。在获得焦点时接收按键的视图（图表、滑块、用方向键移动选中项的列表）设置 `focusable`，并在获得焦点期间绑定自己的按键（`onFocus` / `onBlur` 配合 [`keymap`](../modules/nsh.md#keymap)）；点击它时，按压照样交给外层可按压的视图，比如一张点开详情页的卡片。
 
@@ -365,6 +365,70 @@ view().on_press(open_page).child(
   />
 </View>
 ```
+
+### 按键、滚轮和文本输入
+
+获得键盘焦点的视图会收到窗口的按键。它的 `.on_key_down(..)` 以 `KeyEvent` 运行，获得焦点的视图以及每个监听的祖先都会收到同一次按下。处理函数不返回值：通知只是报告按键，一个视图做什么，不会让其他视图收不到这次按下。按键抬起（`.on_key_up(..)`）交给按下它的那个视图，自动重复的按键带 `repeat`。
+
+要让一次按下不产生文字、也不触发平台默认行为，视图声明捕获：`.capture_keys(..)` 搭配 `KeyCapture::All`，或用 `KeyCapture::keys([..])` 列出 `keymap` 的组合键。获得焦点的视图和它启用的祖先都可以捕获，以挂载的值为准：被移除或停用的视图不再捕获按键。`KeyCapture::All` 包含 Tab，列出 Tab 会取走焦点遍历；只监听而不捕获的视图，把 Tab、Return、空格和滚动留给平台。被捕获的按下以 `captured` 为 true 到达通知，并且不产生文字。获得焦点的 `Input` 保留原生输入，它外层的捕获不会取走它的按键。
+
+获得焦点的视图上，一个按键按以下顺序处理，平台在分发时决定：
+
+1. 先看在此处生效的应用 `keymap` 快捷键（本窗口的，遵循 `repeat` 和 `passThrough`），
+2. 获得焦点的视图和它的祖先的 `.on_key_down(..)` 通知，以及挂载在它们上面的捕获规则，
+3. 文字：按键输入的内容交给视图（`.on_text_input(..)`）、输入法的预编辑（`.on_composition_change(..)`），或平台的默认行为。
+
+可用的应用快捷键优先于视图的捕获。`passThrough: true` 的快捷键报告按键后继续传递，视图和平台仍会收到它，因此捕获照样生效。获得焦点且可按压的视图保留 Return 和空格用于激活；要取走它们，捕获中要列出这些键。
+
+`onWheel`（Rust 的 `.on_wheel(..)`）接收视图上的滚轮和触控板。指针下方最内层启用且监听的视图取走它，周围的滚动视图因此不滚动；没有监听者时，最近的[滚动视图](./scroll.md)滚动。寄宿的原生视图和最上层的对话框先收到滚轮，与它们接收按压的方式一致。
+
+| 方法（Rust） | 类型 | 说明 |
+|---|---|---|
+| `.on_key_down(..)` | `(e: &KeyEvent) => void` | 获得焦点的视图上按下了一个键。每个监听的祖先都会收到；取走按键的是捕获，而不是返回值。 |
+| `.capture_keys(..)` | `impl IntoReactive<KeyCapture>` | 视图自身或其中的视图获得焦点时，哪些按下从文字和平台默认行为中取走：`KeyCapture::All`、由 `keymap` 组合键构成的 `KeyCapture::keys([..])`，或 `KeyCapture::None`。 |
+| `.on_key_up(..)` | `(e: &KeyEvent) => void` | 在视图上按下的键抬起了。 |
+| `.on_wheel(..)` | `(e: &WheelEvent) => void` | 视图上的滚轮或触控板转动了。 |
+| `.on_text_input(..)` | `(e: &TextInputEvent) => void` | 文字提交给了获得焦点的视图：输入、死键或输入法。 |
+| `.on_composition_change(..)` | `(e: &Composition) => void` | 输入法的组字开始、变化或结束（`composing`、`text`）。 |
+| `.ime_cursor_area(..)` | `Bounds<Points>` | 输入法在视图自身坐标中显示候选窗口的位置。 |
+
+`KeyEvent` 包含 `key`（`Key::Named(NamedKey::Enter)`、`Key::Character("a")`：不带 Shift 的键）、`text`（按键输入的文字，已应用 Shift 和布局；不输入文字的键为 `None`）、`modifiers`（`ctrl`、`alt`、`shift`、`cmd`）、`physical`（硬件键码）、`repeat`（自动重复）和 `captured`（视图或其祖先的捕获已取走这次按下，因此不再产生文字或默认行为；输入文字或执行动作的按下为 `false`）。`WheelEvent` 包含 `position`、`page_position`、`modifiers` 和 `delta`，即 `WheelDelta`：`Lines(Point<f32>)` 是逐格滚轮的行数，`Points(Point<Points>)` 是触控板的精确点数，`y` 为正时向下滚动。变体本身就表示单位，没有单独的 `mode` 字段。
+
+```rust
+// 卡片里的图表：用方向键逐格移动，跟随滚轮；卡片接收它周围的按压。
+let at = signal(0_u32);
+let wheel = signal(0.0_f32);
+let arrows = [
+    keymap::Keystroke::parse("left", os()).unwrap(),
+    keymap::Keystroke::parse("right", os()).unwrap(),
+];
+view().on_press(open_page).child(
+    view()
+        .h(px(160.0))
+        .focusable(true)
+        .capture_keys(KeyCapture::keys(arrows))
+        .on_key_down(move |e: &KeyEvent| {
+            if e.key == Key::Named(NamedKey::ArrowRight) {
+                at.update(|n| *n += 1);
+            }
+        })
+        .on_wheel(move |e: &WheelEvent| {
+            let lines = match e.delta {
+                WheelDelta::Lines(delta) => delta.y,
+                // 点数换成这张图表每行 8 点所走的行数。
+                WheelDelta::Points(delta) => delta.y.0 / 8.0,
+            };
+            wheel.update(|total| *total += lines);
+        })
+        .ime_cursor_area(Bounds::new(
+            point(px(0.0), px(0.0)),
+            size(px(1.0), px(20.0)),
+        )),
+)
+```
+
+> [!NOTE]
+> 这些事件属于 Rust 视图。Linux 窗口以及以 Linux 桌面运行的无头测试驱动会投递它们；[`Input`](./input.md) 保留自己的输入，终端习惯保留自己的按键处理。
 
 ### 布局与标识
 

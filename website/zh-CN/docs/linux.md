@@ -198,6 +198,8 @@ TSX 应用用 [`<Window>` 和 `Window.open`](../modules/nsh-desktop.md#windows) 
 快捷键适用于任何键盘布局（在西里尔或希腊字母布局下，Ctrl+C 是美式布局中输入 C 的那个键）。确认输入法组合文字（中文、日文等）的回车
 不会提交。`onKeyPress` 报告的与 React Native 一致：输入的文字、`"Enter"`、`"Backspace"` 和 `"Escape"`；粘贴的文字不报告。
 
+Linux 会投递获得焦点的视图自己的输入：请求键盘焦点的视图（`focusable(true)`）会收到 `.on_key_down(..)` 和 `.on_key_up(..)`，其上的滚轮到达 `.on_wheel(..)`，提交给它的文字到达 `.on_text_input(..)` / `.on_composition_change(..)`，`.ime_cursor_area(..)` 放置候选窗口（见[视图事件](../elements/index.md#按键滚轮和文本输入)）。`.capture_keys(..)` 让一次按下不再产生文字或平台默认行为；应用的 `keymap` 快捷键先运行，`passThrough` 的快捷键会让视图拿到它的按键。以 Linux 桌面运行的无头测试驱动投递同样的事件；`Input` 和终端保留自己的按键处理。
+
 Web 视图是绘制在 NSH 视图之内的 WebKitGTK 页面：sheet、对话框、toast 以及排在它后面的视图会绘制在页面之上，父视图会裁剪它、改变它的透明度。
 它的网站数据（cookie、存储、缓存）按应用分别保存在 `~/.local/share/<app id>/webkit` 和 `~/.cache/<app id>/webkit` 下。
 `webview` 权限同样作用于框架中的页面：应用未获授权的主机的 `iframe` 保持空白。在页面中按 Escape 会离开页面，与文本框中一样

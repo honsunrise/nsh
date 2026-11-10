@@ -968,6 +968,11 @@ pub const INTERNAL_EVENTS: &[EventKind] = &[
     EventKind::Audio,
     EventKind::Window,
     EventKind::EditAction,
+    // Raw View input has typed Rust listeners, not TSX event props.
+    EventKind::KeyDown,
+    EventKind::KeyUp,
+    EventKind::Wheel,
+    EventKind::TextInput,
     EventKind::KeyCommand,
     EventKind::Menu,
     EventKind::ViewableItemsChange,

@@ -159,6 +159,22 @@ bubble back up. What NSH adds:
 - **Focus**: Tab / Shift+Tab is GTK's, in screen order (GTK sorts a container's children by position); hidden screens
   are not child visible, and the views under the newest dialog cannot take the focus. Alerts (`system.rs`) move it
   between their own buttons.
+- **A focused view's raw input** (`key_focus.rs`, `keyboard.rs`): the focused stop's keys are ordinary surface events
+  (`EventKind::KeyDown` / `KeyUp` with `EventPayload::Key`), and the focused node and its ancestors hear a down
+  through the usual listeners; a listener returns nothing. `ViewProps::key_capture` (`Prop::KeyCapture`, mounted)
+  decides from the props, on the main thread, whether the press is taken from text and GTK's defaults: any enabled
+  view on the focused view's ancestry may capture, `KeyCapture::All` includes Tab, and a taken press carries
+  `KeyEvent::captured` and types nothing. The app's `Keymap` controller runs first: an eligible binding wins over a
+  capture, and a `pass_through` binding reports and lets the view and GTK have the key. A disabled view captures
+  nothing, and the platform never waits for the engine. A focused native field or hosted widget keeps its own GTK
+  handling, which no View capture reaches. The module follows the window's own focus widget and keeps no focus of its
+  own.
+- **The wheel, text and preedit of a view** (`input.rs`, `keyboard.rs`): the wheel over a listening view is
+  `EventKind::Wheel` with `WheelEvent`, whose `delta` is `WheelDelta::Lines(Point<f32>)` for a stepping wheel or
+  `WheelDelta::Points(Point<Points>)` for a touchpad; the innermost enabled listener takes it, else the scroll view
+  scrolls, with hosted widgets and the topmost dialog hit-tested first. Committed text and preedit reach a focused
+  view as `TextInput` / `CompositionChange`, and `ViewProps::ime_cursor_area` (`Bounds<Points>`) places the candidate
+  window.
 
 `onKeyPress` reports what UIKit's does: the typed text (`"Enter"` for a line break), `"Backspace"` for a deletion (in
 an empty input too), and `"Escape"`, as on macOS. Pasted and undone text, and the deletion of a selection typed over,

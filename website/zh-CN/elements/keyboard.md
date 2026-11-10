@@ -186,6 +186,35 @@ function MessageBar() {
 > [!NOTE]
 > 要让内容保持在键盘之上，`env(keyboard-inset-height)` 是更简单的方式：它在原生侧随键盘动画，不需要运行代码。
 
+## 聚焦视图上的硬件按键
+
+获得键盘焦点的视图（[`focusable`](./index.md#键盘焦点)，接收按压的视图默认为 `true`）在聚焦期间接收窗口的按键：`.on_key_down(..)` 带一个 `KeyEvent`，以及 `.on_key_up(..)`。按键按下会通知获得焦点的视图和每个监听的祖先；处理函数不返回值，一个视图做什么，不会让其他视图收不到这次按下。
+
+窗口保持激活时，按键释放通知会回到最初接收按下的视图。窗口失去激活会清除已按下键的跟踪；维护自身按键状态的应用也可以在窗口焦点变化时清理这些状态。
+
+`.capture_keys(..)` 让一次按下不再产生文字、也不再触发平台默认行为：`KeyCapture::All` 接收所有按键，`KeyCapture::keys([..])` 接收列出的 `keymap` 组合键。获得焦点的视图和它启用的祖先都可以捕获，以挂载的值为准，因此被移除或停用的视图不再捕获按键。`KeyCapture::All` 包含 Tab，列出 Tab 会取走焦点遍历；只监听而不捕获的视图，把 Tab、Return、空格和滚动留给平台。被捕获的按下以 `captured` 为 true 到达通知，并且不产生文字。获得焦点的 `Input` 保留原生输入，它外层的捕获不会取走它的按键。
+
+应用的 `keymap` 在视图之前：可用的快捷键先于捕获触发，`passThrough: true` 的快捷键报告按键后继续传递，视图和平台仍会收到它。快捷键之后是获得焦点的视图和它祖先的通知及其捕获规则，然后是文字和平台的默认行为。获得焦点且可按压的视图保留 Return 和空格用于激活；要取走它们，捕获中要列出这些键。
+
+输入法正在组合时，未被捕获的按键会先交给输入法，再执行普通激活，因此 Return 可以提交组合文字。只监听已提交文字的视图也遵循这一规则。
+
+同一个视图用 `.on_text_input(..)` 接收文字，用 `.on_composition_change(..)` 接收输入法的预编辑，用 `.ime_cursor_area(Bounds<Points>)` 放置候选窗口（见[视图事件](./index.md#按键滚轮和文本输入)）。
+
+```rust
+// 一块在聚焦时接收所有按键的画布。
+view()
+    .focusable(true)
+    .capture_keys(KeyCapture::All)
+    .on_key_down(move |e: &KeyEvent| {
+        if e.key == Key::Named(NamedKey::Escape) {
+            close();
+        }
+    })
+```
+
+> [!NOTE]
+> 这些事件属于 Rust 视图。Linux 窗口以及以 Linux 桌面运行的无头测试驱动会投递它们；`Input` 保留自己的输入，终端习惯保留自己的按键处理。
+
 ## 平台说明
 
 - **iOS**：让位以键盘自身的时长和 ease-in-ease-out 曲线动画。

@@ -361,10 +361,10 @@ touchscreens, a long press opens menus: handle `onLongPress` with the same funct
 
 ### Keyboard focus
 
-On macOS and the web, Tab moves the keyboard focus between its stops in tree order: the inputs, the views that take
-presses, and every `focusable` view. Focus styles (`focus:`, `.focus(..)`) style the focused view, and Return or Space
-presses it when it takes presses. A click presses a view without focusing it, so focus styles show for keyboard focus
-only.
+On macOS, Linux and the web, Tab moves the keyboard focus between its stops in tree order: the inputs, the views that
+take presses, and every `focusable` view. Focus styles (`focus:`, `.focus(..)`) style the focused view, and Return or
+Space presses it when it takes presses. A click presses a view without moving the keyboard focus, so focus styles show
+for keyboard focus only.
 
 Focus and presses are separate. A view that takes keys while it has the focus (a chart, a slider, a list that moves
 its selection with the arrow keys) sets `focusable` and binds its keys while focused (`onFocus` / `onBlur` with
@@ -383,7 +383,7 @@ its ref's `on_focus_in(..)` and `on_focus_out(..)`: moving between views inside 
 | Prop | Rust | Type | Default | Description |
 |---|---|---|---|---|
 | `focusable` | `.focusable(..)` | `boolean` | `true` for views that take presses | Whether the view is a stop of Tab. `true` makes any view one, whether it takes presses or leaves them to the views around it; `false` leaves a pressable to the pointer (a backdrop that closes a popover, rows the arrow keys move between). |
-| `onFocus` | `.on_focus(..)` | `() => void` | | Tab (or `focus()`) gave the view the keyboard focus. |
+| `onFocus` | `.on_focus(..)` | `() => void` | | The view got the keyboard focus: Tab, or `focus()`. |
 | `onBlur` | `.on_blur(..)` | `() => void` | | The keyboard focus left the view. |
 
 ```rust tabs
@@ -426,6 +426,92 @@ view().on_press(open_page).child(
   />
 </View>
 ```
+
+### Keys, the wheel and text input
+
+A view that has the keyboard focus hears the window's keys. Its `.on_key_down(..)` runs with a `KeyEvent`, and the
+focused view and every ancestor that listens hear the same key down. A handler returns nothing: a notification reports
+the press, and what one view does never keeps another from hearing it. The key up (`.on_key_up(..)`) goes to the view
+the key went down on, and auto-repeats arrive with `repeat` set.
+
+To take a key from typing and from the platform's defaults, a view states a capture: `.capture_keys(..)` with
+`KeyCapture::All`, or `KeyCapture::keys([..])` with `keymap` keystrokes. The focused view and its enabled ancestors may
+capture, as the mounted value says: a view that is removed or disabled no longer takes a key. `KeyCapture::All`
+includes Tab, and naming Tab takes the traversal; a view that only listens leaves Tab, Return, Space and scrolling to
+the platform. A taken press arrives with `captured` set and types nothing. A focused `Input` keeps its native typing,
+so a capture around it does not take its keys.
+
+A key on a focused view runs in this order, which the platform resolves as it hands the key out:
+
+1. the app's `keymap` shortcuts that apply here (the window's, with `repeat` and `passThrough` as bound),
+2. the focused view and its ancestors' `.on_key_down(..)` notifications, with the capture rules mounted on them,
+3. text: what the keys type, committed to the view (`.on_text_input(..)`), an input method's preedit
+   (`.on_composition_change(..)`), or the platform's default.
+
+An eligible app shortcut wins over a view's capture. A shortcut with `passThrough: true` reports its key and lets the
+view and the platform have it, so a capture still applies. A focused view that takes presses keeps Return and Space
+for its activation; a capture names those keys to take them.
+
+`onWheel` (Rust `.on_wheel(..)`) hears the wheel and touchpad over a view. The innermost enabled view under the
+pointer that listens takes it, so the scroll views around it do not scroll; with no listener, the nearest
+[scroll view](./scroll.md) scrolls. A hosted native view and the topmost dialog hear the wheel first, as they do
+presses.
+
+| Method (Rust) | Type | Description |
+|---|---|---|
+| `.on_key_down(..)` | `(e: &KeyEvent) => void` | A key went down on the focused view. Every ancestor that listens hears it; a capture, not a return value, takes the key. |
+| `.capture_keys(..)` | `impl IntoReactive<KeyCapture>` | Which key presses are taken from text and the platform's defaults while the view or a view inside it has the focus: `KeyCapture::All`, `KeyCapture::keys([..])` of `keymap` keystrokes, or `KeyCapture::None`. |
+| `.on_key_up(..)` | `(e: &KeyEvent) => void` | The key came up after going down on the view. |
+| `.on_wheel(..)` | `(e: &WheelEvent) => void` | A wheel or touchpad turned over the view. |
+| `.on_text_input(..)` | `(e: &TextInputEvent) => void` | Text was committed to the focused view: typing, a dead key or an input method. |
+| `.on_composition_change(..)` | `(e: &Composition) => void` | An input method's composition started, changed or ended (`composing`, `text`). |
+| `.ime_cursor_area(..)` | `Bounds<Points>` | Where the input method shows its candidate window, in the view's own coordinates. |
+
+`KeyEvent` has `key` (`Key::Named(NamedKey::Enter)`, `Key::Character("a")`: the key without Shift), `text` (what the
+key types, Shift and layout applied; `None` for a key that types nothing), `modifiers` (`ctrl`, `alt`, `shift`, `cmd`),
+`physical` (the hardware key code), `repeat` (an auto-repeat) and `captured` (a capture, the view's or an ancestor's,
+took the press, so no text or default follows; `false` on a press that types or acts). `WheelEvent` has `position`,
+`page_position`, `modifiers` and `delta`, a `WheelDelta`: `Lines(Point<f32>)` counts a stepping wheel's lines,
+`Points(Point<Points>)` a touchpad's precise points, and positive `y` scrolls down. The variant is the unit: there is
+no separate mode field.
+
+```rust
+// A chart that steps with the arrow keys and follows the wheel, in a card
+// that takes the presses around it.
+let at = signal(0_u32);
+let wheel = signal(0.0_f32);
+let arrows = [
+    keymap::Keystroke::parse("left", os()).unwrap(),
+    keymap::Keystroke::parse("right", os()).unwrap(),
+];
+view().on_press(open_page).child(
+    view()
+        .h(px(160.0))
+        .focusable(true)
+        .capture_keys(KeyCapture::keys(arrows))
+        .on_key_down(move |e: &KeyEvent| {
+            if e.key == Key::Named(NamedKey::ArrowRight) {
+                at.update(|n| *n += 1);
+            }
+        })
+        .on_wheel(move |e: &WheelEvent| {
+            let lines = match e.delta {
+                WheelDelta::Lines(delta) => delta.y,
+                // A touchpad's points, in the eight points this chart moves a line.
+                WheelDelta::Points(delta) => delta.y.0 / 8.0,
+            };
+            wheel.update(|total| *total += lines);
+        })
+        .ime_cursor_area(Bounds::new(
+            point(px(0.0), px(0.0)),
+            size(px(1.0), px(20.0)),
+        )),
+)
+```
+
+> [!NOTE]
+> These events belong to Rust views. Linux windows and the headless test driver running a Linux desktop deliver them;
+> an `Input` keeps its own typing, and the terminal idiom keeps its own keys.
 
 ### Layout and identity
 

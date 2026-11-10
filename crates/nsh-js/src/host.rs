@@ -1366,6 +1366,38 @@ fn payload_object<'js>(cx: &Ctx<'js>, payload: &EventPayload) -> rquickjs::Resul
             obj.set("lines", list)?;
         }
         EventPayload::Layout(frame) => obj.set("bounds", bounds_object(cx, *frame)?)?,
+        // Raw View input has typed Rust listeners, not TS event handlers;
+        // these native-only payloads stay accurate for inspection.
+        EventPayload::Key(e) => {
+            obj.set("key", e.key.name())?;
+            if let Some(text) = &e.text {
+                obj.set("text", text.as_str())?;
+            }
+            obj.set("modifiers", modifiers_object(cx, &e.modifiers)?)?;
+            obj.set("physical", e.physical)?;
+            obj.set("repeat", e.repeat)?;
+            obj.set("captured", e.captured)?;
+        }
+        EventPayload::Wheel(e) => {
+            obj.set("position", point_object(cx, e.position)?)?;
+            obj.set("pagePosition", point_object(cx, e.page_position)?)?;
+            let delta = rquickjs::Object::new(cx.clone())?;
+            match e.delta {
+                nsh_core::WheelDelta::Lines(d) => {
+                    obj.set("mode", "lines")?;
+                    delta.set("x", d.x)?;
+                    delta.set("y", d.y)?;
+                }
+                nsh_core::WheelDelta::Points(d) => {
+                    obj.set("mode", "points")?;
+                    delta.set("x", d.x.0)?;
+                    delta.set("y", d.y.0)?;
+                }
+            }
+            obj.set("delta", delta)?;
+            obj.set("modifiers", modifiers_object(cx, &e.modifiers)?)?;
+        }
+        EventPayload::TextInput(e) => obj.set("text", e.text.as_str())?,
         EventPayload::Pan {
             translation,
             velocity_x,

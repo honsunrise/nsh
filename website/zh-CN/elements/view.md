@@ -83,6 +83,8 @@ view 用 flexbox 布局子元素，默认值为：`flexDirection: "column"`、`f
 
 `View` 有一个自己的属性 `selectable`（Rust 中为 `.selectable(true)`）：视图中的文字作为一个选区一起选择（[文字选择](./text-selection.md)）。其余是[通用属性](./index.md#通用属性)：样式（`style`、`class`、`classList`；Rust 中为 `Styled` 方法）、`disabled`，按压属性（`onPress`、`onLongPress`、`onPressDown`、`onPressUp`、`delayLongPress`、`hitSlop`），状态样式（`activeStyle`、`hoverStyle`、`focusStyle`、`disabledStyle`、`checkedStyle`），`onMouseEnter` / `onMouseMove` / `onMouseLeave`、`onContextMenu`，`onFileDragEnter` / `onFileDragLeave` / `onFileDrop`，`focusable`、`onLayout`、`ref`、`nativeID`、`testID`，Web 上页面的标记（`web={{ element }}`），手势属性（`pan`、`pinch`、`rotation` 及其事件），触摸与响应者属性，无障碍属性，以及 `ios` / `android` / `desktop`。
 
+Linux 窗口和以 Linux 桌面运行的无头测试驱动会让 `focusable` 的视图获得键盘焦点，并把它自己的按键、滚轮和文字事件交给它：`.on_key_down(..)`、`.on_key_up(..)`、`.on_wheel(..)`、`.on_text_input(..)`、`.on_composition_change(..)`、`.ime_cursor_area(Bounds<Points>)` 和 `.capture_keys(..)`（让一次按下不再产生文字或平台默认行为，`KeyCapture`）。这些事件属于 Rust 视图（见[视图事件](./index.md#按键滚轮和文本输入)）。
+
 ## 可选择的视图
 
 设置 `selectable` 后，选区按阅读顺序跨越视图中的 [`Text`](./text.md) 元素和 [`TextView`](./text-view.md)；设置了 `selectable={false}` 的文字不参与，可选择视图中的另一个可选择视图属于外层视图。各平台的手势参见[文字选择](./text-selection.md)。

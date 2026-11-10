@@ -226,6 +226,7 @@ impl Mounter {
                     view.state_mut().events = *events;
                     crate::file_drop::events_changed(surface, view);
                     crate::input::events_changed(surface, view);
+                    crate::keyboard::events_changed(surface, view);
                     crate::access::events_changed(surface, view);
                 }
             }
@@ -331,6 +332,7 @@ impl Mounter {
                 view.set_can_target(!matches!(props.pointer_events, PointerEvents::None));
                 view.state_mut().props = props.clone();
                 crate::input::props_changed(surface, view);
+                crate::keyboard::props_changed(surface, view);
                 crate::selectable_view::props_changed(surface, view);
                 crate::access::props_changed(surface, view);
             }

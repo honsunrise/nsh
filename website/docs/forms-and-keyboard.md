@@ -121,6 +121,11 @@ Because you control the value, you can transform what the user types: `.on_chang
 
 Chinese, Japanese and Korean input methods compose text before committing it: pinyin turns into 腾 once a character is chosen. `onCompositionChange` (Rust `.on_composition_change(..)`) reports the composition as it goes, `{ composing: true, text: "teng" }` while the user types and `{ composing: false, text: "" }` when it ends; the committed text reaches `onChange` before the end. On iOS, Android, macOS and the web, `onChange` also reports the text being composed, as those systems keep it in the input; on Windows, Linux and GPUI it reports the committed text. A controlled input keeps the composition going whatever the app does with the value: a `value` set while the user composes is shown once the composition ends, so an input that uppercases or filters its text takes pinyin as typed.
 
+A view that is not an input can take text too while it has the keyboard focus: `.on_text_input(..)` receives the
+committed text and `.on_composition_change(..)` the preedit, with `.ime_cursor_area(Bounds<Points>)` placing the
+candidate window. Linux windows and the headless test driver running a Linux desktop deliver them (see
+[view events](../elements/index.md#keys-the-wheel-and-text-input)).
+
 A search box that searches the committed text only:
 
 ```rust tabs
@@ -364,7 +369,7 @@ An input's ref has:
 | `set_selection(start, end)` | `setSelection(start, end?)` | Selects `start..end` (UTF-16 units); a caret when they are equal (TSX: without `end`). |
 | `insert_text(text)` | `insertText(text)` | Inserts `text` in place of the selection as the user's edit: one step of the input's undo history, reported by `onChange`; Linux, the web and headless tests only ([pasting](#pasting-images-and-files)). |
 
-On macOS and the web, `focus()` and `blur()` on the ref of a view that takes presses move the keyboard focus as Tab does ([keyboard focus](../elements/index.md#keyboard-focus)).
+On macOS, the web and Linux, `focus()` and `blur()` on the ref of a view that takes the keyboard focus move it as Tab does ([keyboard focus](../elements/index.md#keyboard-focus)).
 
 `dismiss_keyboard()` in Rust and `Keyboard.dismiss()` from `nsh` in TSX unfocus whichever input has focus:
 

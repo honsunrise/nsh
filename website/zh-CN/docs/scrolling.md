@@ -94,6 +94,8 @@ scroll().horizontal().scrollbar(false).child(
 
 手指拖动滚动视图。在桌面（macOS、Windows、Linux）和浏览器中，鼠标像在桌面应用中一样滚动：用滚轮（Shift + 滚轮横向滚动）、触控板、键盘和滚动指示条（鼠标在视图上移动时显示，可以像滚动条一样拖动）；鼠标拖动交给应用的拖拽手势、响应者和文字选择。桌面上的触摸屏像手指一样拖动滚动视图。`scrollbar={false}` 在两个方向上都隐藏指示条：没有横向滚轮的鼠标用 Shift + 滚轮、在周围没有纵向滚动时用滚轮，以及用键盘来移动横向视图。
 
+应用可以用 `.on_wheel(..)` 接收视图上的滚轮：指针下方最内层启用且监听的视图取走它，周围的滚动视图因此不滚动；没有监听者时，最近的滚动视图滚动。`WheelEvent` 包含视图中的 `position`、根视图中的 `pagePosition`、`modifiers` 以及 `delta`，即 `WheelDelta`：`Lines(Point<f32>)` 是逐格滚轮的行数，`Points(Point<Points>)` 是触控板的点数，`y` 为正时向下滚动（[视图事件](../elements/index.md#按键滚轮和文本输入)）。寄宿的原生视图和最上层的对话框先收到滚轮。Linux 窗口和以 Linux 桌面运行的无头测试驱动会投递它。
+
 ### 行为属性
 
 | 属性 | Rust | 类型 | 默认值 | 说明 |

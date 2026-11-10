@@ -257,6 +257,10 @@ events! {
     Audio = "onAudio": "A sound or a player reported (root only; payload: [`EventPayload::Audio`]).",
     Window = "onWindow" as "": "A window of the app's own reported its state, a close press or that it closed (on its root node; desktops; payload: [`EventPayload::Window`]).",
     EditAction = "onEditAction" as "": "An action was chosen from the edit menu a [`Command::OpenEditMenu`] opened on an input (payload: `action`, an [`EditAction`]'s name); Paste is the input's own paste (`onPaste`), never reported.",
+    KeyDown = "onKeyDown" as "": "A key went down on the focused view (Rust-only; payload: [`EventPayload::Key`]). Notifications reach its ancestors asynchronously after native capture was decided.",
+    KeyUp = "onKeyUp" as "": "A key came up after going down on the focused view (Rust-only; payload: [`EventPayload::Key`]).",
+    Wheel = "onWheel" as "": "A wheel or touchpad turned over a view (Rust-only; payload: [`EventPayload::Wheel`]). The innermost enabled listener takes it instead of surrounding scroll views.",
+    TextInput = "onTextInput" as "": "Text was committed to the focused view by typing or an input method (Rust-only; payload: [`EventPayload::TextInput`]).",
 
 }
 
@@ -830,6 +834,12 @@ pub enum EventPayload {
     Mouse(MouseEvent),
     /// A context menu asked for over a view (`onContextMenu`).
     ContextMenu(ContextMenuEvent),
+    /// A key press or release on a focused view (Rust-only listeners).
+    Key(crate::KeyEvent),
+    /// A wheel over a view (Rust-only listeners).
+    Wheel(crate::WheelEvent),
+    /// Text committed to a focused view (Rust-only listeners).
+    TextInput(crate::TextInputEvent),
     /// Where the pointer was at a press (`onPress`, `onLongPress`,
     /// `onPressDown`, `onPressUp`), with the modifier keys and the click
     /// count, on backends that know it.
@@ -2831,6 +2841,15 @@ pub enum Prop {
     /// popover). Unset, the views that take presses are stops.
     #[prop(js = "focusable")]
     Focusable(Option<bool>),
+    /// Keys captured by a view or a focused descendant before native
+    /// defaults run (`Interactive::capture_keys`, Rust-only).
+    #[prop(reset = Prop::KeyCapture(crate::KeyCapture::None))]
+    KeyCapture(crate::KeyCapture),
+    /// `imeCursorArea`: where an input method shows its candidate window
+    /// while a view that listens to `on_text_input` has the keyboard focus,
+    /// in the view's own coordinates (Rust: `ime_cursor_area`).
+    #[prop(reset = Prop::ImeCursorArea(None))]
+    ImeCursorArea(Option<Bounds<Points>>),
     /// `selectable` of a view: the texts in it share one selection, as a
     /// browser page's do ([`crate::selection`]); texts with
     /// `selectable={false}` stay out of it, a selectable view inside

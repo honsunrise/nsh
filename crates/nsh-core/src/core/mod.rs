@@ -5179,6 +5179,20 @@ impl<M: TextEngine> Core<M> {
                     flags |= dirty::VIEW_PROPS;
                 }
             }
+            Prop::KeyCapture(value) => {
+                let props = node.props.get_or_insert_default();
+                if props.key_capture != value {
+                    props.key_capture = value;
+                    flags |= dirty::VIEW_PROPS;
+                }
+            }
+            Prop::ImeCursorArea(value) => {
+                let props = node.props.get_or_insert_default();
+                if props.ime_cursor_area != value {
+                    props.ime_cursor_area = value;
+                    flags |= dirty::VIEW_PROPS;
+                }
+            }
             Prop::SelectableView(value) => {
                 let props = node.props.get_or_insert_default();
                 if props.selectable_view != value {

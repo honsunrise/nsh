@@ -153,6 +153,7 @@ input::zoom_factor(notches)                                      # a count of wh
 js::host::Clamped::clamped(max)                                  # a generic number (a JS value, a recorded slot)
 js::host::Clamped::clamped(min)                                  # a generic number (a JS value, a recorded slot)
 js::host::HostInput::as_number ->                                # a generic number (a JS value, a recorded slot)
+keyboard::WheelDelta::Lines.0                                    # a count of wheel lines (dimensionless; a notch is one line)
 mount::ImageOptions.fade_ms                                      # time
 mount::ScrollBehavior.deceleration                               # a rate or a physical constant of an animation
 mount::ScrollBehavior.max_zoom                                   # a zoom scale factor

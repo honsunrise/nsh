@@ -7,14 +7,19 @@
 //! menu's item with that shortcut is chosen (`onMenu`). Else Tab moves the
 //! keyboard focus between the inputs and the views that are its stops
 //! (those that take presses, and `focusable` ones that take none) where the
-//! platform does (macOS, the web), Return and Space press the pressable it
-//! is on, Shift+F10 asks it for its context menu (the web, Linux), the
-//! focused input takes the keys that edit it, and Escape goes back.
+//! platform does (macOS, the web), and, on Linux, a view that has the
+//! keyboard focus hears the press (its `on_key_down` and its ancestors'),
+//! the capture rule of it or of an enabled view around it deciding whether
+//! the platform keeps it (`capture_keys`); Return and Space press the
+//! pressable it is on, Shift+F10 asks it for its context menu (the web,
+//! Linux), the focused input takes the keys that edit it, and Escape goes
+//! back.
 
 use nsh_core::{
-    Command, EventKind, EventPayload, MountBatch, MountItem, NodeId, PayloadValue, ROOT_ID,
+    Command, EventKind, EventPayload, Key, KeyEvent, MountBatch, MountItem, NamedKey, NodeId,
+    PayloadValue, ROOT_ID, TextInputEvent,
     desktop::{MenuItem, Shortcut},
-    keymap::{Key, KeyMatch, Keystroke},
+    keymap::{self, KeyMatch, Keystroke},
     platform::Os,
     tailwind::state::FOCUSED,
 };
@@ -52,25 +57,41 @@ impl Headless {
 
     /// The step `keyboard.press(<keys>)`: presses `keys`, a keystroke as
     /// `nsh/keymap` names it (`"mod+k"`, `"shift+tab"`, `"escape"`; `mod` is
-    /// the app's platform's command key). A binding of the app's keymap
-    /// that fires where the focus is hears it (`onKeyCommand`), and takes
-    /// the key unless it passes it through; then, on a desktop, the
-    /// application menu's item with that shortcut is chosen; else the
-    /// focused input takes a character, Backspace or the return key, and
-    /// Escape goes back as the desktops' back key does when there is
-    /// something to go back from.
+    /// the app's platform's command key).
+    ///
+    /// The app's shortcuts take the key first (`onKeyCommand`), as the
+    /// platforms' keymaps do: those of the focused window and those of no
+    /// window, and one that passes the key through lets it go on. Then, on
+    /// Linux, a view that has the keyboard focus (`focusable(true)`) hears
+    /// the press, and so do its ancestors (`on_key_down`); a capture rule of
+    /// it or of an enabled view around it (`capture_keys`), read off the
+    /// mounted props, says whether the platform keeps the press: a captured
+    /// press types nothing and runs no default. The view hears the `KeyUp`
+    /// for its down after the platform has chosen what the key does (the
+    /// defaults below, or none when captured), as a platform sends it. An
+    /// uncaptured press goes on to the platform's defaults: the
+    /// application menu's shortcuts, a window's Escape, the context-menu
+    /// keys, Tab, Enter and Space pressing the pressable, text
+    /// (`on_text_input`) where the view listens for it, and Escape going
+    /// back. Elsewhere the focused input
+    /// takes a character, Backspace or the return key, and Escape goes back
+    /// as the desktops' back key does when there is something to go back
+    /// from.
     pub fn press_key(&mut self, keys: &str) -> Result<(), String> {
         self.step(format!("keyboard.press({keys})"));
         let stroke = Keystroke::parse(keys, self.environment.os).map_err(|e| e.to_string())?;
         let editing = self.screen.focused().is_some();
-        // A hardware keyboard fires the app's shortcuts (`on_key`,
-        // `keymap.bind`), on every platform: those of the focused window
-        // and those of no window, as the desktops match them.
+        // The window the key is pressed in: the focused one, as the
+        // desktops match their bindings.
         let window = self
             .windows
             .as_ref()
             .and_then(|w| w.focused())
             .unwrap_or(ROOT_ID);
+        // The app's shortcuts take the key first, as the platforms' keymaps
+        // do: those of the focused window and those of no window, as the
+        // desktops match them. A binding that passes the key through leaves
+        // it to the view and the defaults below.
         let found = match self.screen.keymap() {
             Some(keymap) => keymap.find_in(window, stroke, editing, false),
             None => KeyMatch::None,
@@ -87,93 +108,157 @@ impl Headless {
         if found.consumed() {
             return self.done();
         }
+        // The view the press went down on, with the decision its down
+        // carried: the release goes to it once the platform has chosen what
+        // the key does, as a platform sends it (a press that reads the key
+        // as held must see it down).
+        let mut release = None;
+        let mut heard = None;
+        if !editing
+            && self.delivers_raw_input()
+            && let Some(view) = self.screen.key_focus()
+            && self.screen.accepts_key_focus(view)
+        {
+            if self.screen.hosts_native(view) {
+                return self.done();
+            }
+            let mut event = view_key_event(&stroke, true);
+            let captured = self.screen.captures_key(view, &event);
+            event.captured = captured;
+            // The platform sends the key whatever the view reports itself:
+            // the core bubbles it to its ancestors, so a listener above a
+            // view that has none still hears it (the driver's `send` would
+            // drop it before that).
+            self.engine.control().dispatch_event(
+                view,
+                EventKind::KeyDown,
+                EventPayload::Key(event),
+            );
+            release = Some((view, captured));
+            if !captured {
+                heard = Some(view);
+            }
+        }
         let m = stroke.modifiers;
-        // Then the application menu's shortcuts choose its items, on a
-        // desktop, as the platforms' menus do after the keymap; an item that
-        // leaves the key to the focused field does not take it.
-        let apple = matches!(self.environment.os, Os::MacOs | Os::Ios);
-        if self.environment.desktop()
-            && let Ok(pressed) = Shortcut::parse(keys, apple)
-            && let Some((id, fires)) = self.screen.app_menu().and_then(|items| {
-                MenuItem::find_shortcut(items, &pressed)
-                    .map(|a| (a.id, !editing || a.fires_while_editing()))
-            })
-            && fires
-        {
-            // A role item (id 0: Quit, Hide) is the system's on a platform:
-            // here it takes the key and does nothing.
-            if id != 0 {
-                self.engine.control().dispatch_event(
-                    ROOT_ID,
-                    EventKind::Menu,
-                    EventPayload::Map(vec![("id", PayloadValue::Number(f64::from(id)))]),
-                );
-            }
-            return self.done();
-        }
-        let plain = !(m.ctrl || m.alt || m.cmd);
-        // The key goes to the focused window: Escape closes one of the app's
-        // own that says so (`closeOnEscape`), natively.
-        if stroke.key == Key::Escape
-            && plain
-            && !m.shift
-            && self.windows.as_mut().is_some_and(|w| w.escape())
-        {
-            self.report_windows();
-            return self.done();
-        }
-        // Shift+F10 asks the focused view for its context menu where views
-        // take the keyboard focus and the key is the platform's: the web
-        // and Linux (macOS has no such key; Windows focuses fields only). The
-        // nearest view around it listening hears `onContextMenu`, with no
-        // pointer, at its bottom-start corner; a focused input keeps the
-        // key for its own edit menu.
-        if matches!(self.environment.os, Os::Web | Os::Linux)
-            && nsh_core::input::opens_context_menu(false, Some(stroke.key), m)
-        {
-            if self.screen.focused().is_none()
-                && let Some(from) = self.screen.key_focus()
-            {
-                self.keyboard_context_menu(from, m);
-            }
-            return self.done();
-        }
-        if stroke.key == Key::Tab && plain && self.tabs_to_views() {
-            self.tab(m.shift);
-            return self.done();
-        }
-        // A stop that takes no presses (a `focusable` chart) hears its keys
-        // through the keymap only, above.
-        if let Some(view) = self.screen.key_focus()
-            && self.screen.focused().is_none()
-            && self.screen.hears(view, EventKind::Press)
-            && plain
-            && !m.shift
-            && matches!(stroke.key, Key::Enter | Key::Char(' '))
-        {
-            for kind in [EventKind::PressDown, EventKind::PressUp, EventKind::Press] {
-                self.send(view, kind, EventPayload::None);
-            }
-            return self.done();
-        }
-        if let Some(input) = self.screen.focused() {
-            match stroke.key {
-                Key::Enter if plain => self.return_key(input),
-                Key::Backspace if plain => self.backspace(input),
-                Key::Char(c) if plain => {
-                    let c = if m.shift { shifted(c) } else { c };
-                    self.key(input, c);
+        // What the platform does with an uncaptured key, in the order the
+        // platforms run it; the release follows below.
+        if release.is_none_or(|(_, captured)| !captured) {
+            'defaults: {
+                // Then the application menu's shortcuts choose its items,
+                // on a desktop, as the platforms' menus do after the
+                // keymap; an item that leaves the key to the focused field
+                // does not take it.
+                let apple = matches!(self.environment.os, Os::MacOs | Os::Ios);
+                if self.environment.desktop()
+                    && let Ok(pressed) = Shortcut::parse(keys, apple)
+                    && let Some((id, fires)) = self.screen.app_menu().and_then(|items| {
+                        MenuItem::find_shortcut(items, &pressed)
+                            .map(|a| (a.id, !editing || a.fires_while_editing()))
+                    })
+                    && fires
+                {
+                    // A role item (id 0: Quit, Hide) is the system's on a
+                    // platform: here it takes the key and does nothing.
+                    if id != 0 {
+                        self.engine.control().dispatch_event(
+                            ROOT_ID,
+                            EventKind::Menu,
+                            EventPayload::Map(vec![("id", PayloadValue::Number(f64::from(id)))]),
+                        );
+                    }
+                    break 'defaults;
                 }
-                _ => {}
+                let plain = !(m.ctrl || m.alt || m.cmd);
+                // The key goes to the focused window: Escape closes one of
+                // the app's own that says so (`closeOnEscape`), natively.
+                if stroke.key == keymap::Key::Escape
+                    && plain
+                    && !m.shift
+                    && self.windows.as_mut().is_some_and(|w| w.escape())
+                {
+                    self.report_windows();
+                    break 'defaults;
+                }
+                // Shift+F10 asks the focused view for its context menu
+                // where views take the keyboard focus and the key is the
+                // platform's: the web and Linux (macOS has no such key;
+                // Windows focuses fields only). The nearest view around it
+                // listening hears `onContextMenu`, with no pointer, at its
+                // bottom-start corner; a focused input keeps the key for
+                // its own edit menu.
+                if matches!(self.environment.os, Os::Web | Os::Linux)
+                    && nsh_core::input::opens_context_menu(false, Some(stroke.key), m)
+                {
+                    if self.screen.focused().is_none()
+                        && let Some(from) = self.screen.key_focus()
+                    {
+                        self.keyboard_context_menu(from, m);
+                    }
+                    break 'defaults;
+                }
+                if stroke.key == keymap::Key::Tab && plain && self.tabs_to_views() {
+                    self.tab(m.shift);
+                    break 'defaults;
+                }
+                // A pressable stop is pressed by Enter and Space, as the
+                // platforms activate it before any text: its keys reach it
+                // through the raw notification and the keymap, above.
+                if let Some(view) = self.screen.key_focus()
+                    && self.screen.focused().is_none()
+                    && self.screen.hears(view, EventKind::Press)
+                    && plain
+                    && !m.shift
+                    && self.tabs_to_views()
+                    && matches!(stroke.key, keymap::Key::Enter | keymap::Key::Char(' '))
+                {
+                    for kind in [EventKind::PressDown, EventKind::PressUp, EventKind::Press] {
+                        self.send(view, kind, EventPayload::None);
+                    }
+                    break 'defaults;
+                }
+                // Text goes to the focused view that listens for it, once
+                // no shortcut, capture or activation kept the press: what
+                // the key types.
+                if let Some(view) = heard
+                    && self.screen.hears(view, EventKind::TextInput)
+                    && let Some(text) = typed_text(&stroke)
+                {
+                    self.send(
+                        view,
+                        EventKind::TextInput,
+                        EventPayload::TextInput(TextInputEvent::new(text)),
+                    );
+                    break 'defaults;
+                }
+                if let Some(input) = self.screen.focused() {
+                    match stroke.key {
+                        keymap::Key::Enter if plain => self.return_key(input),
+                        keymap::Key::Backspace if plain => self.backspace(input),
+                        keymap::Key::Char(c) if plain => {
+                            let c = if m.shift { shifted(c) } else { c };
+                            self.key(input, c);
+                        }
+                        _ => {}
+                    }
+                    break 'defaults;
+                }
+                if stroke.key == keymap::Key::Escape
+                    && plain
+                    && !m.shift
+                    && self.screen.back_target() != crate::screen::Back::Nothing
+                {
+                    self.step("back");
+                    self.go_back(true);
+                }
             }
-            return self.done();
         }
-        if stroke.key == Key::Escape
-            && plain
-            && !m.shift
-            && self.screen.back_target() != crate::screen::Back::Nothing
-        {
-            return self.back();
+        // The release follows what the key did, as a platform sends it.
+        if let Some((view, captured)) = release {
+            let mut up = view_key_event(&stroke, false);
+            up.captured = captured;
+            self.engine
+                .control()
+                .dispatch_event(view, EventKind::KeyUp, EventPayload::Key(up));
         }
         self.done()
     }
@@ -193,6 +278,14 @@ impl Headless {
         let event =
             nsh_core::ContextMenuEvent::new(position, bounds.origin + position, modifiers, None);
         self.send(id, EventKind::ContextMenu, EventPayload::ContextMenu(event));
+    }
+
+    /// Whether the platform gives a view its own input — a focused view its
+    /// keys, a view under the wheel its scrolling: Linux, outside a terminal
+    /// (the terminal host reads and delivers its own).
+    pub(super) fn delivers_raw_input(&self) -> bool {
+        self.environment.os == Os::Linux
+            && self.environment.idiom != nsh_core::platform::Idiom::Terminal
     }
 
     /// Whether Tab stops at views (not only inputs), as on macOS, the web,
@@ -333,6 +426,62 @@ impl Headless {
             .control()
             .dispatch_event(id, EventKind::ChangeText, payload);
         self.report_selection(id);
+    }
+}
+
+/// The key event of `stroke`, up or down, as a platform reports it on a
+/// focused view.
+fn view_key_event(stroke: &Keystroke, down: bool) -> KeyEvent {
+    let m = stroke.modifiers;
+    let key = match stroke.key {
+        keymap::Key::Char(' ') => Key::Named(NamedKey::Space),
+        keymap::Key::Char(c) => Key::character(c),
+        keymap::Key::Enter => Key::Named(NamedKey::Enter),
+        keymap::Key::Escape => Key::Named(NamedKey::Escape),
+        keymap::Key::Tab => Key::Named(NamedKey::Tab),
+        keymap::Key::Backspace => Key::Named(NamedKey::Backspace),
+        keymap::Key::Delete => Key::Named(NamedKey::Delete),
+        keymap::Key::Insert => Key::Named(NamedKey::Insert),
+        keymap::Key::Up => Key::Named(NamedKey::ArrowUp),
+        keymap::Key::Down => Key::Named(NamedKey::ArrowDown),
+        keymap::Key::Left => Key::Named(NamedKey::ArrowLeft),
+        keymap::Key::Right => Key::Named(NamedKey::ArrowRight),
+        keymap::Key::Home => Key::Named(NamedKey::Home),
+        keymap::Key::End => Key::Named(NamedKey::End),
+        keymap::Key::PageUp => Key::Named(NamedKey::PageUp),
+        keymap::Key::PageDown => Key::Named(NamedKey::PageDown),
+        keymap::Key::F(n) => Key::Named(NamedKey::F(n)),
+    };
+    let text = if down {
+        typed_text(stroke).map(nsh_core::element::SharedString::from)
+    } else {
+        None
+    };
+    KeyEvent::new(
+        key,
+        text,
+        keymap::Modifiers {
+            ctrl: m.ctrl,
+            alt: m.alt,
+            shift: m.shift,
+            cmd: m.cmd,
+        },
+        u32::from(stroke.key.hid_usage().unwrap_or(0)),
+        false,
+    )
+}
+
+/// The text `stroke` types on the US layout (Shift applied), when it types
+/// any.
+fn typed_text(stroke: &Keystroke) -> Option<String> {
+    let m = stroke.modifiers;
+    if m.ctrl || m.alt || m.cmd {
+        return None;
+    }
+    match stroke.key {
+        keymap::Key::Char(' ') => Some(" ".to_owned()),
+        keymap::Key::Char(c) => Some(if m.shift { shifted(c) } else { c }.to_string()),
+        _ => None,
     }
 }
 

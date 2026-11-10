@@ -418,6 +418,30 @@ pub(crate) fn composition(p: &EventPayload) -> Option<Cow<'_, Composition>> {
     }))
 }
 
+/// A key going down or up; typed payloads are borrowed by every listener.
+pub(crate) fn key_event(p: &EventPayload) -> Option<Cow<'_, crate::KeyEvent>> {
+    match p {
+        EventPayload::Key(event) => Some(Cow::Borrowed(event)),
+        _ => None,
+    }
+}
+
+/// A wheel over a view.
+pub(crate) fn wheel(p: &EventPayload) -> Option<Cow<'_, crate::WheelEvent>> {
+    match p {
+        EventPayload::Wheel(event) => Some(Cow::Borrowed(event)),
+        _ => None,
+    }
+}
+
+/// Text committed by the view's input method.
+pub(crate) fn text_input(p: &EventPayload) -> Option<Cow<'_, crate::TextInputEvent>> {
+    match p {
+        EventPayload::TextInput(event) => Some(Cow::Borrowed(event)),
+        _ => None,
+    }
+}
+
 pub(crate) fn size(p: &EventPayload) -> Option<Cow<'_, Size<Points>>> {
     Some(Cow::Owned(crate::geometry::size_pt(
         number(p, "width"),

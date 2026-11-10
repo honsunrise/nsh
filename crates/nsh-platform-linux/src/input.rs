@@ -59,7 +59,7 @@ use std::{
 use gtk4::{self as gtk, gdk, glib, glib::translate::ToGlibPtr, graphene, prelude::*};
 use nsh_core::{
     Command, Cursor, EventKind, EventPayload, GestureValues, MouseButton, NodeId, PayloadValue,
-    PointerEvents, ROOT_ID, TouchEvent, TouchPhase, TouchPoint, ViewKind,
+    PointerEvents, ROOT_ID, TouchEvent, TouchPhase, TouchPoint, ViewKind, WheelDelta, WheelEvent,
     desktop::{ResizeEdge, WindowControl},
     geometry::{Points, point},
     input::{
@@ -893,6 +893,14 @@ fn scroll_event(
         }
     };
     let modifiers = event.modifier_state();
+    // A view that listens to the wheel takes it whole: the scroll views
+    // around it (and the Ctrl + wheel pinch below) leave it alone.
+    if (dx != 0.0 || dy != 0.0)
+        && let Some(delta) = wheel_delta(kind, dx, dy)
+        && wheel_listener_takes(surface, x, y, delta, self::modifiers(modifiers))
+    {
+        return glib::Propagation::Stop;
+    }
     // Mice have no pinch: Ctrl + wheel pinches, as it zooms on desktops.
     if let WheelInput::Step { .. } = kind
         && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
@@ -989,8 +997,7 @@ pub(crate) fn simulate(surface: &Rc<Surface>, action: Simulated) {
             mouse_moved(surface, x, y, gdk::ModifierType::empty());
         }
         Simulated::Wheel(x, y, dx, dy) => {
-            let step = WheelInput::Step { notches: false };
-            wheel_input(surface, x, y, dx, dy, time, step);
+            simulated_wheel(surface, x, y, dx, dy, time, held);
         }
         Simulated::Hover(x, y) => {
             surface.input.last_state.set(Some(held));
@@ -2451,6 +2458,75 @@ fn wheel_input(
     }
 }
 
+/// A scroll by `(dx, dy)` points that no GDK event carried (the native
+/// test driver's): the innermost enabled `onWheel` view takes it, in
+/// points, as it would a precise wheel; else the scroll views scroll, as
+/// they do for the real wheel.
+#[cfg(feature = "dev")]
+fn simulated_wheel(
+    surface: &Rc<Surface>,
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+    time: f64,
+    modifiers: gdk::ModifierType,
+) {
+    let delta = WheelDelta::Points(point(Points(dx), Points(dy)));
+    if wheel_listener_takes(surface, x, y, delta, self::modifiers(modifiers)) {
+        return;
+    }
+    let step = WheelInput::Step { notches: false };
+    wheel_input(surface, x, y, dx, dy, time, step);
+}
+
+/// Gives the wheel at `(x, y)` to the innermost enabled `onWheel` view
+/// (`delta` in its units, the position in its coordinates): true when one
+/// took it, so the scroll views around it leave the wheel alone.
+fn wheel_listener_takes(
+    surface: &Surface,
+    x: f32,
+    y: f32,
+    delta: WheelDelta,
+    modifiers: nsh_core::keymap::Modifiers,
+) -> bool {
+    let Some(view) = wheel_listener(surface, x, y) else {
+        return false;
+    };
+    let (local_x, local_y) = local(surface, &view, x, y);
+    let wheel = WheelEvent::new(
+        point(Points(local_x), Points(local_y)),
+        point(Points(x), Points(y)),
+        delta,
+        modifiers,
+    );
+    surface.event(view.id(), EventKind::Wheel, EventPayload::Wheel(wheel));
+    true
+}
+
+/// The deltas of a wheel event a view listens to: line counts for mouse
+/// notches, points for a touchpad.
+fn wheel_delta(kind: WheelInput, dx: f32, dy: f32) -> Option<WheelDelta> {
+    match kind {
+        WheelInput::Step { .. } => Some(WheelDelta::Lines(point(dx, dy))),
+        WheelInput::Touchpad => Some(WheelDelta::Points(point(Points(dx), Points(dy)))),
+        WheelInput::Stop => None,
+    }
+}
+
+/// The innermost enabled view at `(x, y)` that listens to `onWheel`,
+/// unless a hosted widget there scrolls itself.
+fn wheel_listener(surface: &Surface, x: f32, y: f32) -> Option<NshView> {
+    let hit = pick(&event_root(surface), x, y)?;
+    if hit.native.as_ref().is_some_and(scrolls_itself) {
+        return None;
+    }
+    chain(&hit.view).into_iter().find(|v| {
+        let state = v.state();
+        !state.props.accessibility.state.disabled && state.events.contains(EventKind::Wheel)
+    })
+}
+
 fn new_wheel(view: NshView, time: f64) -> Wheel {
     let mut velocity = VelocityTracker::default();
     velocity.add(time, point(Points(0.0), Points(0.0)));
@@ -2607,5 +2683,137 @@ mod tests {
     fn wheel_notches_scale_with_the_view() {
         assert!((notch(1000.0) - 100.0).abs() < 0.01);
         assert_eq!(notch(0.0), 1.0);
+    }
+
+    /// The same listener decision serves the real wheel and the simulated
+    /// one: an enabled `onWheel` view takes both, an ordinary view neither.
+    #[test]
+    fn the_wheel_goes_to_an_enabled_listener() {
+        use nsh_core::{EventMask, MountItem, Points, ROOT_ID, ViewKind, geometry::point};
+
+        use crate::gtk_test::{apply, frame, run, surface, view, wait_until};
+
+        run(|| {
+            let surface = surface();
+            apply(
+                &surface,
+                &[
+                    MountItem::Create {
+                        id: 2,
+                        kind: ViewKind::View,
+                    },
+                    MountItem::Insert {
+                        parent: ROOT_ID,
+                        child: 2,
+                        before: None,
+                    },
+                    MountItem::Frame {
+                        id: 2,
+                        frame: frame(0.0, 0.0, 50.0, 50.0),
+                    },
+                    MountItem::Create {
+                        id: 3,
+                        kind: ViewKind::View,
+                    },
+                    MountItem::Insert {
+                        parent: ROOT_ID,
+                        child: 3,
+                        before: None,
+                    },
+                    MountItem::Frame {
+                        id: 3,
+                        frame: frame(60.0, 0.0, 50.0, 50.0),
+                    },
+                ],
+            );
+            let mut events = EventMask::default();
+            events.set(EventKind::Wheel, true);
+            apply(&surface, &[MountItem::Events { id: 2, events }]);
+            let window = crate::gtk_test::show(&surface);
+            assert!(wait_until(
+                || view(&surface, 2).is_mapped() && view(&surface, 2).width() == 50
+            ));
+            let modifiers = nsh_core::keymap::Modifiers::default();
+            let delta = WheelDelta::Points(point(Points(1.0), Points(1.0)));
+            assert!(super::wheel_listener_takes(
+                &surface, 10.0, 10.0, delta, modifiers
+            ));
+            assert!(!super::wheel_listener_takes(
+                &surface, 80.0, 10.0, delta, modifiers
+            ));
+            window.destroy();
+        });
+    }
+
+    /// The test driver's scroll takes the same listener decision as the
+    /// real wheel (in points), so it neither misses an `onWheel` view nor
+    /// scrolls its container instead.
+    #[cfg(feature = "dev")]
+    #[test]
+    fn a_simulated_wheel_goes_to_the_listener_too() {
+        use nsh_core::{EventMask, MountItem, Points, ROOT_ID, ViewKind, geometry::size};
+
+        use crate::gtk_test::{apply, frame, run, surface, view, wait_until};
+
+        run(|| {
+            let surface = surface();
+            apply(
+                &surface,
+                &[
+                    MountItem::Create {
+                        id: 2,
+                        kind: ViewKind::Scroll,
+                    },
+                    MountItem::Insert {
+                        parent: ROOT_ID,
+                        child: 2,
+                        before: None,
+                    },
+                    MountItem::Frame {
+                        id: 2,
+                        frame: frame(0.0, 0.0, 100.0, 100.0),
+                    },
+                    MountItem::ScrollContent {
+                        id: 2,
+                        size: size(Points(100.0), Points(400.0)),
+                    },
+                    MountItem::Create {
+                        id: 3,
+                        kind: ViewKind::View,
+                    },
+                    MountItem::Insert {
+                        parent: 2,
+                        child: 3,
+                        before: None,
+                    },
+                    MountItem::Frame {
+                        id: 3,
+                        frame: frame(0.0, 0.0, 100.0, 60.0),
+                    },
+                ],
+            );
+            let window = crate::gtk_test::show(&surface);
+            assert!(wait_until(
+                || view(&surface, 3).is_mapped() && view(&surface, 3).width() == 100
+            ));
+            let offset = |surface: &Surface| {
+                view(surface, 2)
+                    .state()
+                    .scroll
+                    .as_ref()
+                    .map_or(0.0, |scroll| scroll.y.0)
+            };
+            // Without a listener the wheel scrolls the scroll view.
+            super::simulate(&surface, super::Simulated::Wheel(50.0, 30.0, 0.0, 20.0));
+            let scrolled = offset(&surface);
+            assert!(scrolled > 0.0, "the wheel scrolls the container");
+            // A listener takes it whole: no scroll.
+            let mut events = EventMask::default();
+            events.set(EventKind::Wheel, true);
+            apply(&surface, &[MountItem::Events { id: 3, events }]);
+            super::simulate(&surface, super::Simulated::Wheel(50.0, 30.0, 0.0, 20.0));
+            assert_eq!(offset(&surface), scrolled, "the listener took it");
+            window.destroy();
+        });
     }
 }

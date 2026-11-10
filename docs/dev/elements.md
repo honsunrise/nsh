@@ -182,6 +182,22 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   headless driver moves its focus (`focus_calls`); on a view that is not a stop it does nothing. Linux grabs the
   stop's widget (`key_focus::focus`). Windows and
   GPUI leave `focus()` on views to them; iOS and Android focus inputs only.
+- **Raw input on a focused view** (Linux windows and the headless driver running a Linux desktop): the focused stop's
+  keys go to it as ordinary surface events, `EventKind::KeyDown` / `KeyUp` with `EventPayload::Key(KeyEvent)`; the
+  core's `component_event` notifies the focused node and its ancestors through the usual `Listener`s, and a listener
+  returns nothing, so every listener hears the press. `Prop::KeyCapture` (`ViewProps::key_capture`, Rust
+  `.capture_keys(..)`) is a mounted policy, not a callback answer: `KeyCapture::All` or `KeyCapture::keys([..])`
+  takes the press from text and the platform's defaults for any enabled view on the focused view's ancestry, sets
+  `KeyEvent::captured` and sends no text or default (Tab traversal included when captured); a disabled or removed
+  view captures nothing, and merely listening never takes Tab, Return, Space or scrolling. The app's keymap runs
+  first, so an eligible binding wins over a capture and a `pass_through` binding reports and lets the view and the
+  platform have the key. The wheel is `EventKind::Wheel` with `WheelEvent`, whose `delta` is
+  `WheelDelta::Lines(Point<f32>)` for a stepping wheel or `WheelDelta::Points(Point<Points>)` for a touchpad, with no
+  mode field; committed text and preedit are `EventKind::TextInput` / `CompositionChange` (the first with
+  `EventPayload::TextInput(TextInputEvent)`, the composition keeping its map), and
+  `.ime_cursor_area(Bounds<Points>)` is where the candidate window goes (`Prop::ImeCursorArea`, Rust-only). A hosted
+  native widget and the topmost dialog keep their hit-test priority over views, and a focused native input keeps its
+  own keys.
 - **`onPanEnd` / `onPanStart`** carry `value` (`{ x?, y? }`, the axes `pan` binds): the bound pan values at that moment (a drag may grab a value mid
   animation), for snapping.
 - **Imperative calls**: nodes have `focus()`, `blur()` (inputs, and views that take presses where they are stops of
@@ -279,9 +295,11 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
 - **Keyboard shortcuts** (`nsh`'s `keymap`): the root's `Prop::Keymap` mounts the surface's whole table
   (`MountItem::Keymap`); the platform matches a key against it on the spot, consumes it and reports the root's
   `KeyCommand` (the binding's id), so the main thread never waits for JS (`docs/dev/js-modules.md`, the macOS and
-  Linux pages' "Keyboard"). A binding that passes its key through (`passThrough`, Rust's
+  Linux pages' "Keyboard"). The table runs before a focused view's raw input: an eligible binding wins over the
+  view's capture, and a binding that passes its key through (`passThrough`, Rust's
   `KeyOptions::pass_through`; `KeyMatch::Notify`) is reported and the key goes on as if nothing were bound: Tab
-  still moves the focus, which is how `Select` and `Combobox` close an open list on Tab. iOS and Android match a hardware keyboard's keys: iOS in `pressesBegan:` of its text
+  still moves the focus, which is how `Select` and `Combobox` close an open list on Tab, and a view's capture and the
+  platform's text still see it. iOS and Android match a hardware keyboard's keys: iOS in `pressesBegan:` of its text
   inputs (before UIKit's text system) and of the root view (presses nothing inside handled), keys named by their HID
   usage (`Key::from_hid_usage`) and the character they type, a `repeat` binding firing on a timer of its own while
   the key is held (UIKit sends a held key's press once); Android in `NshView.dispatchKeyEvent` (before the focused
