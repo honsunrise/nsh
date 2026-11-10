@@ -201,6 +201,23 @@ The height is the part of the keyboard that overlaps the NSH surface. When the w
 > To keep content above the keyboard, `env(keyboard-inset-height)` is the simpler form: it animates with the keyboard
 > natively, without running code.
 
+## Hardware keys on custom Rust views
+
+On Linux, a focused Rust view can forward hardware input to an app-owned interaction engine: `on_key_down`
+reports the current-layout logical key, physical keycode and repeats, and `on_key_up` reports the matching release.
+This suits a custom-rendered canvas or embedded interaction surface. Named shortcuts use `on_key` / `on_key_with`;
+text editing uses `Input`, and terminal sessions use `Terminal`.
+
+Both listeners return nothing. `capture_keys(KeyCapture::All)` or `capture_keys(KeyCapture::keys(...))` mounts
+the consumption rule before input arrives; `KeyEvent::captured` reports that decision. The rule accepts reactive
+values; omitting it on a retained view restores `KeyCapture::None`. Eligible app shortcuts keep their priority,
+and focused native inputs keep their keys. A captured Tab stays in the view; an observed Tab follows normal traversal.
+
+Key-down notifications reach enabled listening ancestors within the same native window. Releases return to the
+original press target while its window remains active; deactivation clears held keys. `KeyEvent::text` is a keyval
+preview rather than committed text. The Rust API is also exercised by the Linux-desktop headless driver; Rust UI
+sets can expose app-specific components and events to TSX.
+
 ## Platform notes
 
 - **iOS**: the room animates with the keyboard's own duration and an ease-in-ease-out curve.

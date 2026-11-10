@@ -1284,6 +1284,16 @@ fn payload_object<'js>(cx: &Ctx<'js>, payload: &EventPayload) -> rquickjs::Resul
                 None => obj.set("pressedButton", Value::new_null(cx.clone()))?,
             }
         }
+        EventPayload::Key(event) => {
+            obj.set("key", event.key.name())?;
+            if let Some(text) = &event.text {
+                obj.set("text", text.as_str())?;
+            }
+            obj.set("modifiers", modifiers_object(cx, &event.modifiers)?)?;
+            obj.set("physical", event.physical)?;
+            obj.set("repeat", event.repeat)?;
+            obj.set("captured", event.captured)?;
+        }
         EventPayload::Wheel(e) => {
             obj.set("position", point_object(cx, e.position)?)?;
             obj.set("pagePosition", point_object(cx, e.page_position)?)?;

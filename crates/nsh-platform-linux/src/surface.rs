@@ -185,6 +185,8 @@ pub(crate) struct Surface {
     pub(crate) native: crate::native::NativeState,
     /// The app's keyboard shortcuts ([`crate::keymap`]).
     pub(crate) keymap: crate::keymap::KeymapState,
+    /// Focused views' keys ([`crate::keyboard`]).
+    pub(crate) keyboard: crate::keyboard::Keyboard,
     /// The window's chrome: title bar, menus ([`crate::chrome`]).
     pub(crate) chrome: crate::chrome::Chrome,
     /// Selections across the texts of selectable views
@@ -280,6 +282,7 @@ impl Surface {
             access: RefCell::new(Arc::default()),
             native: Default::default(),
             keymap: Default::default(),
+            keyboard: Default::default(),
             chrome: Default::default(),
             selection: Default::default(),
             fps: RefCell::new(None),
@@ -454,6 +457,7 @@ impl Surface {
         crate::selectable_view::reset(self);
         crate::keymap::clear(self);
         crate::window::clear(self);
+        crate::keyboard::reset(self);
         self.js_frame.set(false);
     }
 

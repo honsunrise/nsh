@@ -14,8 +14,8 @@ use std::{
 
 use nsh_core::{
     AccessibilityRole, AccessibilityState, Bounds, Command, Dialog, EventKind, EventMask,
-    GestureValues, InputConfig, MountBatch, MountItem, NodeId, PanActivation, Point, PointerEvents,
-    Points, Size, ViewKind, element::PropEnum,
+    GestureValues, InputConfig, KeyCapture, KeyEvent, MountBatch, MountItem, NodeId, PanActivation,
+    Point, PointerEvents, Points, Size, ViewKind, element::PropEnum,
 };
 
 use crate::selector::{Matcher, Selector, TextMatch};
@@ -208,6 +208,10 @@ struct View {
     /// A shown overlay's place in the Tab order
     /// ([`nsh_core::ViewProps::tab_after`]).
     tab_after: Option<NodeId>,
+    /// The keys it captures for itself and what it holds (`capture_keys`):
+    /// a press one of them matches is the platform's, so it types nothing
+    /// and runs no default.
+    key_capture: KeyCapture,
     /// It is selected (`selected`, its accessibility state; a canvas node's
     /// `selected`).
     selected: bool,
@@ -489,6 +493,7 @@ impl Screen {
                 view.disabled = props.accessibility.state.disabled;
                 view.focusable = props.focusable;
                 view.tab_after = props.tab_after;
+                view.key_capture = props.key_capture.clone();
                 view.selected = props.accessibility.state.selected;
                 view.accessibility_state = props.accessibility.state;
                 view.level = props.accessibility.level;
@@ -2226,6 +2231,59 @@ impl Screen {
             .is_some_and(|v| v.events.contains(event))
     }
 
+    /// Whether `id` or an enabled view around it captures the press
+    /// `event` (`capture_keys`), as the platform's capture policy reads it
+    /// off the mounted props: the press is the platform's then, so it types
+    /// nothing and runs no default. The walk stops at the root of the
+    /// window `id` is in, as a window of the app's own is a window of its
+    /// own on a platform: the views around that root capture nothing. A
+    /// view that was unmounted, or is disabled, captures nothing.
+    pub(crate) fn captures_key(&self, id: NodeId, event: &KeyEvent) -> bool {
+        let window = self.window_of(id);
+        let mut current = Some(id);
+        while let Some(id) = current {
+            let Some(view) = self.nodes.get(&id) else {
+                return false;
+            };
+            if !self.disabled_from(id, Some(window)) && view.key_capture.captures(event) {
+                return true;
+            }
+            if id == window {
+                return false;
+            }
+            current = view.parent;
+        }
+        false
+    }
+
+    /// Whether `id` can hold the keyboard focus now: it is a stop of Tab
+    /// ([`Self::is_tab_stop`]) — on screen, a stop of its own, and enabled in
+    /// its own window. A view disabled or hidden after it had the focus
+    /// takes no input, as a platform's focused view that is no longer a
+    /// stop; a disabled view of another window is not over it.
+    pub(crate) fn accepts_key_focus(&self, id: NodeId) -> bool {
+        self.shown().contains(&id) && self.is_tab_stop(id)
+    }
+
+    /// The view a pointer at `at` (in the root) reaches in `id`'s window, as
+    /// [`Self::hit_pointer`] has it: a dialog over the window first, the
+    /// innermost view there after it.
+    pub(crate) fn hit_pointer_at(&self, at: Point<Points>, id: NodeId) -> NodeId {
+        self.hit_pointer(at, self.window_of(id))
+    }
+
+    /// Whether view `id` hosts native content of its own (a web view, a
+    /// native component, a video): it takes its keys itself, so no view's
+    /// capture rule and no text handling applies to it.
+    pub(crate) fn hosts_native(&self, id: NodeId) -> bool {
+        self.nodes.get(&id).is_some_and(|v| {
+            matches!(
+                v.kind,
+                Some(ViewKind::WebView | ViewKind::Native | ViewKind::Video | ViewKind::Input)
+            )
+        })
+    }
+
     pub(crate) fn input(&self, id: NodeId) -> Option<&Input> {
         self.nodes.get(&id)?.input.as_ref()
     }
@@ -2336,6 +2394,34 @@ impl Screen {
         .collect()
     }
 
+    /// Whether `id` is a stop of Tab now (and can hold the keyboard focus):
+    /// shown, a [`nsh_core::ViewProps::focus_stop`] of its own, and enabled —
+    /// in its own window, as a window of the app's own is a window of its
+    /// own on a platform, so a disabled view of the main window is not
+    /// over a view in another one.
+    fn is_tab_stop(&self, id: NodeId) -> bool {
+        let Some(v) = self.nodes.get(&id) else {
+            return false;
+        };
+        let window = self.window_of(id);
+        if self.disabled_from(id, Some(window)) {
+            return false;
+        }
+        if let Some(input) = &v.input {
+            return input.config.editable;
+        }
+        // A link in a text view is a stop after it, in text order
+        // (`TextLink::focus_stop`).
+        if v.span.is_some() {
+            return v.focusable == Some(true);
+        }
+        let props = nsh_core::ViewProps {
+            focusable: v.focusable,
+            ..Default::default()
+        };
+        props.focus_stop(v.events.contains(EventKind::Press))
+    }
+
     /// The stop a press on `id` gives the focus to in a terminal: `id` or
     /// its nearest ancestor that Tab stops at (`tab_stops`), else the
     /// topmost stop over the press's point (a table's hit layer over its
@@ -2358,6 +2444,112 @@ impl Screen {
                     .bounds_in_root(*stop)
                     .is_some_and(|bounds| bounds.contains(&point))
         })
+    }
+
+    /// The views `id` is in, innermost first, up to and including the root
+    /// of its window (a window of the app's own is a window of its own on a
+    /// platform, so nothing above its root takes part).
+    fn window_chain(&self, id: NodeId) -> Vec<NodeId> {
+        let window = self.window_of(id);
+        let mut out = Vec::new();
+        let mut current = Some(id);
+        while let Some(id) = current {
+            let Some(view) = self.nodes.get(&id) else {
+                break;
+            };
+            out.push(id);
+            if id == window {
+                break;
+            }
+            current = view.parent;
+        }
+        out
+    }
+
+    /// The view around the one under the pointer that hears the wheel, and
+    /// whether it takes it: the nearest enabled listener, and whether no
+    /// scroll view is nearer than it nor is itself one
+    /// ([`nsh_core::input::wheel_listener`], as the platforms share it). A
+    /// view that takes it keeps the scroll views around it from scrolling;
+    /// one that only observes (a scroll view, or a view around one) lets
+    /// them scroll.
+    pub(crate) fn wheel_listener(&self, id: NodeId) -> Option<(NodeId, bool)> {
+        let window = self.window_of(id);
+        nsh_core::input::wheel_listener(
+            self.window_chain(id),
+            |&id| self.hears(id, EventKind::Wheel) && !self.disabled_from(id, Some(window)),
+            |&id| self.kind(id) == Some(ViewKind::Scroll),
+        )
+    }
+
+    /// The innermost view at `id` or around it that hosts native content of
+    /// its own (a web view, a native component, a video), within its own
+    /// window: input that reaches it is its own, not the views' around it.
+    pub(crate) fn native_host(&self, id: NodeId) -> Option<NodeId> {
+        let window = self.window_of(id);
+        let mut current = Some(id);
+        while let Some(id) = current {
+            let view = self.nodes.get(&id)?;
+            if matches!(
+                view.kind,
+                Some(ViewKind::WebView | ViewKind::Native | ViewKind::Video)
+            ) {
+                return Some(id);
+            }
+            if id == window {
+                return None;
+            }
+            current = view.parent;
+        }
+        None
+    }
+
+    /// The innermost scroll view at `id` or around it that a wheel by
+    /// `delta` moves, within `id`'s window: the core's own choice for a
+    /// wheel ([`nsh_core::input::scroll_target`]) — scroll views along the
+    /// wheel's axis first (a vertical wheel over a horizontal carousel
+    /// scrolls the page around it), an inner one passing the wheel on at
+    /// its edge, and a disabled (`.scrollable(false)`) one taking nothing.
+    pub(crate) fn wheel_scroll(&self, id: NodeId, delta: Point<Points>) -> Option<NodeId> {
+        nsh_core::input::scroll_target(
+            self.window_chain(id),
+            delta.x,
+            delta.y,
+            |&id| self.scroll(id).map(|scroll| scroll.horizontal),
+            |&id| self.scroll_can_move(id, delta),
+        )
+    }
+
+    /// Whether scroll view `id` can move by `delta` (positive moves the
+    /// content up / left), as [`nsh_core::scroll::ScrollState::can_scroll`]
+    /// has it: it is enabled, scrolls along that way and has room left
+    /// there.
+    fn scroll_can_move(&self, id: NodeId, delta: Point<Points>) -> bool {
+        let Some(view) = self.nodes.get(&id) else {
+            return false;
+        };
+        let Some(scroll) = &view.scroll else {
+            return false;
+        };
+        if scroll.locked {
+            return false;
+        }
+        let (dx, dy) = (delta.x.0, delta.y.0);
+        let d = if scroll.horizontal {
+            if dx != 0.0 { dx } else { dy }
+        } else {
+            dy
+        };
+        let end = self.scroll_end(id).0;
+        if d == 0.0 || end <= 0.0 {
+            return false;
+        }
+        let at = if scroll.horizontal {
+            scroll.x.0
+        } else {
+            scroll.y.0
+        };
+        (d > 0.0 && at < end - 0.5) || (d < 0.0 && at > 0.5)
     }
 
     pub(crate) fn scroll(&self, id: NodeId) -> Option<&Scroll> {

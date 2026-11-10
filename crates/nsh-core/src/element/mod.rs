@@ -210,6 +210,7 @@ pub use crate::{
     BoxShadow, ContextMenuEvent, Cursor, Dialog, DialogButton, DialogButtonStyle, EdgeInsets,
     EllipsizeMode, EventKind, EventPayload, Haptic, HapticImpact, HapticNotification,
     HeaderSystemItem, KeyboardAppearance, KeyboardDismissMode, KeyboardTaps, KeyboardType,
+    Key, KeyCapture, KeyEvent, NamedKey,
     KeyframeAnimation, Keyframes, LayoutAnimation, LayoutCurve, LayoutProperty, LayoutTransition,
     ListAlignment, ListScrollPosition, ListViewport, MacOsBackdrop, MacOsBackdropBlending,
     MacOsBackdropMaterial, MacOsBackdropState, Measurement, ModalAnimation, ModalPresentation,

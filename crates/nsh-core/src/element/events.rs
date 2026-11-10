@@ -602,6 +602,13 @@ pub(crate) fn context_menu(p: &EventPayload) -> Option<Cow<'_, ContextMenuEvent>
     }
 }
 
+pub(crate) fn key_event(p: &EventPayload) -> Option<Cow<'_, crate::KeyEvent>> {
+    match p {
+        EventPayload::Key(event) => Some(Cow::Borrowed(event)),
+        _ => None,
+    }
+}
+
 pub(crate) fn wheel(p: &EventPayload) -> Option<Cow<'_, WheelEvent>> {
     match p {
         EventPayload::Wheel(e) => Some(Cow::Borrowed(e)),

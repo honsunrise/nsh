@@ -12,6 +12,12 @@
 //! A binding that does not fire, or fires and passes the key through
 //! (`KeyBinding::pass_through`), lets GTK try the next shortcut and then
 //! the focus widget.
+//!
+//! A view that hears the raw keys ([`crate::keyboard`]) runs the bindings
+//! itself, once, before it is notified ([`raw`]): the newest eligible
+//! binding reports its `KeyCommand` there, and its shortcut's action does
+//! not report the same press again. Other views keep the controller's
+//! path unchanged.
 
 use std::{
     cell::{Cell, RefCell},
@@ -22,7 +28,7 @@ use std::{
 use gtk4::{self as gtk, glib, prelude::*};
 use nsh_core::{
     EventKind, EventPayload, NodeId, PayloadValue, ROOT_ID,
-    keymap::{Key, Keymap, Keystroke},
+    keymap::{Key, KeyBinding, Keymap, Keystroke},
     platform::Os,
 };
 
@@ -35,15 +41,19 @@ pub(crate) struct KeymapState {
     keymap: RefCell<Option<Arc<Keymap>>>,
     /// A controller on each window's root view.
     controllers: RefCell<Vec<(glib::WeakRef<NshView>, gtk::ShortcutController)>>,
-    /// Each binding's trigger, whether it fires in a text field
-    /// (`KeyBinding::in_text`) and its window (`KeyBinding::window`), for
-    /// [`claims`]; a binding passing its key through claims none.
-    triggers: RefCell<Vec<(gtk::ShortcutTrigger, bool, Option<NodeId>)>>,
+    /// Each binding's trigger and the binding, newest first, for [`claims`]
+    /// (a binding passing its key through claims none) and for the shortcut
+    /// dispatch a raw view runs itself ([`raw`]).
+    triggers: RefCell<Vec<(gtk::ShortcutTrigger, KeyBinding)>>,
     /// The binding whose key is held down (GDK does not mark auto-repeats):
     /// it does not fire again until a key is released.
     held: Rc<Cell<Option<u32>>>,
     /// The windows' key controllers that see releases, and their windows.
     releases: RefCell<Vec<(glib::WeakRef<gtk::Window>, gtk::EventControllerKey)>>,
+    /// A raw view's dispatch ran the app's bindings for the press in
+    /// flight ([`raw`]): no shortcut reports or consumes it again, whichever
+    /// binding the controller reaches.
+    raw_fired: Cell<bool>,
 }
 
 /// `MountItem::Keymap`: replaces the surface's shortcuts.
@@ -52,17 +62,18 @@ pub(crate) fn set(surface: &Rc<Surface>, keymap: Arc<Keymap>) {
     if keymap.is_empty() {
         return;
     }
-    // What a press of the menus' shortcuts gives way to (`claims`).
+    // What a press of the menus' shortcuts gives way to (`claims`) and how
+    // a raw view's own dispatch runs them ([`raw`]).
     let display = surface.root.display();
     let mut triggers = Vec::new();
     for binding in keymap.bindings().iter().rev() {
-        if skipped(binding) || binding.pass_through {
+        if skipped(binding) {
             continue;
         }
         if let Some(trigger) = trigger(&binding.keystroke, |key| shifted(&display, key))
             .and_then(|t| gtk::ShortcutTrigger::parse_string(&t))
         {
-            triggers.push((trigger, binding.in_text, binding.window));
+            triggers.push((trigger, *binding));
         }
     }
     *surface.keymap.triggers.borrow_mut() = triggers;
@@ -118,6 +129,12 @@ pub(crate) fn attach(surface: &Rc<Surface>, root: &NshView) {
                 if let Some(window) = widget.root().and_downcast::<gtk::Window>() {
                     watch_releases(&surface, &window);
                 }
+                if !controller_acts(&surface.keymap) {
+                    // The raw view's own lookup ran the newest eligible
+                    // binding already: no shortcut reports (or consumes)
+                    // this press again.
+                    return glib::Propagation::Proceed;
+                }
                 let held = &surface.keymap.held;
                 if repeat || held.get() != Some(id) {
                     held.set(Some(id));
@@ -157,6 +174,7 @@ pub(crate) fn clear(surface: &Surface) {
         }
     }
     surface.keymap.held.set(None);
+    surface.keymap.raw_fired.set(false);
     surface.keymap.triggers.borrow_mut().clear();
     surface.keymap.keymap.borrow_mut().take();
 }
@@ -201,10 +219,11 @@ pub(crate) fn claims(surface: &Surface, event: &gtk::gdk::Event) -> bool {
         .triggers
         .borrow()
         .iter()
-        .any(|(trigger, in_text, window)| {
-            trigger.trigger(event, false) != gtk::gdk::KeyMatch::None
-                && window.is_none_or(|w| w == root.id())
-                && fires(root.upcast_ref(), *in_text)
+        .any(|(trigger, binding)| {
+            !binding.pass_through
+                && trigger.trigger(event, false) != gtk::gdk::KeyMatch::None
+                && binding.window.is_none_or(|w| w == root.id())
+                && fires(root.upcast_ref(), binding.in_text)
         })
 }
 
@@ -225,6 +244,106 @@ fn watch_releases(surface: &Surface, window: &gtk::Window) {
     keys.connect_key_released(move |_, _, _, _| held.set(None));
     window.add_controller(keys.clone());
     releases.push((window.downgrade(), keys));
+}
+
+/// What the app's bindings did with a key a raw view hears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RawFire {
+    /// No binding takes it: the raw view, its capture rule and the
+    /// platform's defaults.
+    None,
+    /// A binding reported it and took it: nothing hears the key after.
+    Consumed,
+    /// A binding reported it and passes the key on: the raw view and the
+    /// defaults still get it.
+    Passed,
+}
+
+/// Forgets the press a previous raw dispatch ran the bindings for, so the
+/// shortcut controller acts on the next press again.
+pub(crate) fn forget(surface: &Surface) {
+    surface.keymap.raw_fired.set(false);
+}
+
+/// Runs the app's bindings for a key a raw view hears, before the view is
+/// notified: the newest binding whose trigger matches the event and whose
+/// window is the key's (its `pass_through` respected), as the shortcut
+/// controller would. Reports it once (`KeyCommand`) and says what it did;
+/// the controller then leaves the whole press alone ([`controller_acts`]),
+/// so an older binding of the same keystroke cannot report or consume it
+/// either.
+pub(crate) fn raw(surface: &Surface, event: &gtk::gdk::Event, repeat: bool) -> RawFire {
+    // This path makes the entire shortcut decision, even when a passing
+    // binding's repeat reports nothing. The controller must not retry an
+    // older match after it.
+    surface.keymap.raw_fired.set(true);
+    // The root view of the window the key is in.
+    let root = event
+        .surface()
+        .and_then(|s| crate::window::root_at(surface, &s))
+        .unwrap_or_else(|| surface.root.clone());
+    let (fired, binding) = {
+        let triggers = surface.keymap.triggers.borrow();
+        pick(&triggers[..], root.id(), repeat, |trigger| {
+            trigger.trigger(event, false) != gtk::gdk::KeyMatch::None
+        })
+    };
+    let Some(binding) = binding else {
+        return fired;
+    };
+    if let Some(window) = root.root().and_downcast::<gtk::Window>() {
+        watch_releases(surface, &window);
+    }
+    surface.keymap.held.set(Some(binding.id));
+    surface.event(
+        ROOT_ID,
+        EventKind::KeyCommand,
+        EventPayload::Value(PayloadValue::Number(f64::from(binding.id))),
+    );
+    fired
+}
+
+/// The newest binding of `triggers` (newest first) whose window is `window`
+/// and whose trigger `matches`, and what its `pass_through` does with the
+/// key; `repeat` is the auto-repeat of a key whose binding fires once
+/// (`KeyMatch`'s rules).
+fn pick(
+    triggers: &[(gtk::ShortcutTrigger, KeyBinding)],
+    window: NodeId,
+    repeat: bool,
+    matches: impl Fn(&gtk::ShortcutTrigger) -> bool,
+) -> (RawFire, Option<KeyBinding>) {
+    let Some(binding) = triggers
+        .iter()
+        .filter(|(trigger, binding)| binding.window.is_none_or(|w| w == window) && matches(trigger))
+        .map(|(_, binding)| *binding)
+        .next()
+    else {
+        return (RawFire::None, None);
+    };
+    if repeat && !binding.repeat && binding.pass_through {
+        // Its auto-repeat goes on as if there were no binding.
+        return (RawFire::None, None);
+    }
+    if repeat && !binding.repeat {
+        // Consumed, reported once already.
+        return (RawFire::Consumed, None);
+    }
+    let fired = if binding.pass_through {
+        RawFire::Passed
+    } else {
+        RawFire::Consumed
+    };
+    (fired, Some(binding))
+}
+
+/// Whether the shortcut controller's action acts on this press at all: not
+/// after a raw view's dispatch ran the bindings for it ([`raw`]), whatever
+/// binding (`claim`) the controller reaches — the newest eligible one was
+/// already chosen, and an older duplicate must not report or consume the
+/// key either.
+fn controller_acts(state: &KeymapState) -> bool {
+    !state.raw_fired.get()
 }
 
 /// Whether a binding fires where the focus of the window of root view
@@ -326,7 +445,76 @@ fn trigger(
 
 #[cfg(test)]
 mod tests {
-    use nsh_core::{keymap::Keystroke, platform::Os};
+    use gtk4 as gtk;
+    use nsh_core::{
+        ROOT_ID,
+        keymap::{KeyBinding, Keystroke, When},
+        platform::Os,
+    };
+
+    use crate::gtk_test::run;
+
+    /// The lookup a raw view runs: newest first, the window's own or any
+    /// window's, `pass_through` respected, and a held key's auto-repeat
+    /// once.
+    #[test]
+    fn pick_respects_windows_repeats_and_pass_through() {
+        run(|| {
+            let stroke = |stroke: &str| Keystroke::parse(stroke, Os::Linux).expect("a stroke");
+            let trigger =
+                |trigger: &str| gtk::ShortcutTrigger::parse_string(trigger).expect("a trigger");
+            let triggers = vec![
+                (
+                    trigger("<Control>a"),
+                    KeyBinding::new(1, stroke("mod+a"), When::Always, false).in_window(7),
+                ),
+                (
+                    trigger("<Control>b"),
+                    KeyBinding::new(2, stroke("mod+b"), When::Always, false).passing_through(true),
+                ),
+                (
+                    trigger("<Control>c"),
+                    KeyBinding::new(3, stroke("mod+c"), When::Always, false),
+                ),
+            ];
+            // The window 7 binding is not the main window's; the newest of
+            // the rest passes its key through.
+            let (fired, binding) = super::pick(&triggers, ROOT_ID, false, |_| true);
+            assert_eq!(fired, super::RawFire::Passed);
+            assert_eq!(binding.map(|binding| binding.id), Some(2));
+            // A repeat of a binding that fires once: consumed, reported
+            // once already.
+            let (fired, binding) = super::pick(&triggers, 7, true, |_| true);
+            assert_eq!(fired, super::RawFire::Consumed);
+            assert!(binding.is_none());
+            // A passing binding lets the auto-repeat go on.
+            let passing = vec![(
+                trigger("<Control>b"),
+                KeyBinding::new(2, stroke("mod+b"), When::Always, false).passing_through(true),
+            )];
+            let (fired, _) = super::pick(&passing, ROOT_ID, true, |_| true);
+            assert_eq!(fired, super::RawFire::None);
+            // Nothing matches: nothing is reported.
+            let (fired, _) = super::pick(&triggers, ROOT_ID, false, |_| false);
+            assert_eq!(fired, super::RawFire::None);
+            // The click of a binding: the newest match decides, so an older
+            // binding of the same keystroke (which the guard keeps the
+            // controller from acting on) never takes the key.
+            let duplicates = vec![
+                (
+                    trigger("<Control>a"),
+                    KeyBinding::new(4, stroke("mod+a"), When::Always, false).passing_through(true),
+                ),
+                (
+                    trigger("<Control>a"),
+                    KeyBinding::new(5, stroke("mod+a"), When::Always, false),
+                ),
+            ];
+            let (fired, binding) = super::pick(&duplicates, ROOT_ID, false, |_| true);
+            assert_eq!(fired, super::RawFire::Passed, "the newest passes it on");
+            assert_eq!(binding.map(|binding| binding.id), Some(4));
+        });
+    }
 
     #[test]
     fn triggers() {

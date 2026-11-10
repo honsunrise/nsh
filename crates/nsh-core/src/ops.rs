@@ -261,6 +261,8 @@ events! {
     Wheel = "onWheel": "A mouse wheel or touchpad scrolled over the view (payload: [`EventPayload::Wheel`]): the nearest listener around the view under the pointer hears it; one nearer than any scroll view under the pointer takes the wheel, so nothing scrolls or zooms natively ([`crate::input::wheel_listener`]).",
 
     WebEvaluation = "onWebEvaluation" as "": "A native WebView evaluation reply (internal; payload: id and a JSON envelope string data).",
+    KeyDown = "onKeyDown" as "": "A hardware key went down on a focused Rust view (payload: [`EventPayload::Key`]); asynchronous notifications reach its listening ancestors within the window.",
+    KeyUp = "onKeyUp" as "": "A hardware key was released after going down on a focused Rust view (payload: [`EventPayload::Key`]).",
 }
 
 /// What an input holds, for the system's autofill and suggestions
@@ -926,6 +928,8 @@ pub enum EventPayload {
     ContextMenu(ContextMenuEvent),
     /// A wheel over a view (`onWheel`).
     Wheel(WheelEvent),
+    /// A hardware key transition on a focused Rust view.
+    Key(crate::KeyEvent),
     /// Where the pointer was at a press (`onPress`, `onLongPress`,
     /// `onPressDown`, `onPressUp`), with the modifier keys and the click
     /// count, on backends that know it.
@@ -3032,6 +3036,9 @@ pub enum Prop {
     /// popover). Unset, the views that take presses are stops.
     #[prop(js = "focusable")]
     Focusable(Option<bool>),
+    /// Hardware keys captured by a Rust view or a focused descendant.
+    #[prop(reset = Prop::KeyCapture(crate::KeyCapture::None))]
+    KeyCapture(crate::KeyCapture),
     /// `selectable` of a view: the texts in it share one selection, as a
     /// browser page's do ([`crate::selection`]); texts with
     /// `selectable={false}` stay out of it, a selectable view inside
