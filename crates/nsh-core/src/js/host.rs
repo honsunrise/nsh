@@ -990,9 +990,11 @@ pub const INTERNAL_EVENTS: &[EventKind] = &[
     EventKind::Audio,
     EventKind::Window,
     EventKind::EditAction,
-    // Native Rust view key notifications are not direct TSX event props.
+    // Native Rust view key and text notifications are not direct TSX event
+    // props.
     EventKind::KeyDown,
     EventKind::KeyUp,
+    EventKind::TextInput,
     EventKind::KeyCommand,
     EventKind::Menu,
     EventKind::ViewableItemsChange,

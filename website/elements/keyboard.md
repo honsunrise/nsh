@@ -213,10 +213,30 @@ the consumption rule before input arrives; `KeyEvent::captured` reports that dec
 values; omitting it on a retained view restores `KeyCapture::None`. Eligible app shortcuts keep their priority,
 and focused native inputs keep their keys. A captured Tab stays in the view; an observed Tab follows normal traversal.
 
+The same view takes committed text with `on_text_input`, which reports what typing, a dead key or an input method
+committed (not `KeyEvent::text`, a keyval preview). A captured key commits nothing. `on_composition_change` reports
+an input method's preedit while it composes; Return reaches the input method first during a composition, so it
+commits the text instead of activating the view, even when the view listens only for committed text. `Input` and
+`Terminal` keep their own text input.
+
+`ime_cursor_area` places the input method's candidate window in the view's own coordinates. It is reactive and
+optional: a `Signal<Option<Bounds<Points>>>`, a closure returning `Some` or `None`, or a fixed value. Setting it to
+`None`, and omitting it on a retained view, returns the candidate window to the view's origin instead of leaving a
+stale rectangle. The platform reacts to every mounted change without waiting for a listener.
+
 Key-down notifications reach enabled listening ancestors within the same native window. Releases return to the
-original press target while its window remains active; deactivation clears held keys. `KeyEvent::text` is a keyval
-preview rather than committed text. The Rust API is also exercised by the Linux-desktop headless driver; Rust UI
-sets can expose app-specific components and events to TSX.
+original press target while its window remains active; deactivation clears held keys. The Rust API is also exercised
+by the Linux-desktop headless driver (typed characters reach `on_text_input` there; there is no emulated input method);
+Rust UI sets can expose app-specific components and events to TSX.
+
+```rust
+// A focused canvas: committed text, preedit and a candidate window under its caret.
+view()
+    .focusable(true)
+    .on_text_input(move |e: &TextInputEvent| text.update(|t| t.push_str(&e.text)))
+    .on_composition_change(move |e: &Composition| composing.set(e.text.clone()))
+    .ime_cursor_area(move || caret.get()) // Option<Bounds<Points>>
+```
 
 ## Platform notes
 

@@ -141,6 +141,9 @@ pub(super) fn payload(host: &Bindings, payload: &EventPayload) -> Result<Value, 
                 ("modifiers", modifiers(&w.modifiers)?),
             ])?
         }
+        // Raw view input has typed Rust listeners, not TSX event props; the
+        // wire fallback stays exhaustive.
+        EventPayload::TextInput(e) => object([("text", Value::string(e.text.as_str())?)])?,
         EventPayload::ContextMenu(p) => object([
             ("position", point(p.position)?),
             ("pagePosition", point(p.page_position)?),

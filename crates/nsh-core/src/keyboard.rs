@@ -1,9 +1,11 @@
-//! Hardware key transitions and mounted capture rules for custom Rust views.
+//! Hardware key transitions, mounted capture rules and committed text for
+//! custom Rust views.
 //!
 //! Linux windows and the headless Linux desktop driver deliver [`KeyEvent`]
-//! notifications. App-rendered interaction surfaces can forward physical
-//! keys, current-layout logical keys, repeats and releases to their own
-//! input engine. Named shortcuts remain [`crate::keymap`]'s responsibility.
+//! and [`TextInputEvent`] notifications. App-rendered interaction surfaces
+//! can forward physical keys, current-layout logical keys, repeats and
+//! releases to their own input engine, and take the text typing or an input
+//! method commits. Named shortcuts remain [`crate::keymap`]'s responsibility.
 //!
 //! [`KeyCapture`] decides native consumption before callbacks run. Focus
 //! stays with the platform's existing Tab and explicit-focus behavior.
@@ -208,6 +210,29 @@ pub struct KeyEvent {
     /// A listener is still notified, on the focused view and its
     /// ancestors, whatever this is.
     pub captured: bool,
+}
+
+/// Text committed to the focused view (`on_text_input`): what a key typed,
+/// a dead key's composition or an input method committed.
+///
+/// A press captured by [`KeyCapture`] commits nothing, and a keyval preview
+/// ([`KeyEvent::text`]) is not this event: a composition reports its preedit
+/// through `on_composition_change` and then its commit here. Linux and the
+/// headless Linux desktop driver deliver it today; the other platforms keep
+/// the API compiling and never send one yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TextInputEvent {
+    /// The committed text (more than one character when an input method
+    /// commits a word, or when a paste-like input method commits at once).
+    pub text: SharedString,
+}
+
+impl TextInputEvent {
+    /// Builds an event containing committed `text`.
+    pub fn new(text: impl Into<SharedString>) -> TextInputEvent {
+        TextInputEvent { text: text.into() }
+    }
 }
 
 /// The keys a view consumes before the platform's native defaults run

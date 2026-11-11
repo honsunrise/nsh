@@ -396,6 +396,11 @@ pub struct ViewProps {
     /// defaults run. Linux decides from the mounted rules without waiting
     /// for a listener (`Interactive::capture_keys`).
     pub key_capture: crate::KeyCapture,
+    /// `imeCursorArea`: where an input method shows its candidate window
+    /// while the view has the keyboard focus, in the view's coordinates
+    /// (`Interactive::on_text_input`). Cleared, the platform returns the
+    /// candidate window to the view's origin.
+    pub ime_cursor_area: Option<crate::Bounds<Points>>,
     /// The view is a selectable view (`View`'s `selectable`): the
     /// texts in its subtree that are not `selectable={false}` share one
     /// selection, from text to text ([`crate::selection`]); an area inside

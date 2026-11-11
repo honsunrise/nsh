@@ -17,7 +17,7 @@
 
 use nsh_core::{
     Command, EventKind, EventPayload, Key, KeyEvent, MountBatch, MountItem, NamedKey, NodeId,
-    PayloadValue, ROOT_ID,
+    PayloadValue, ROOT_ID, TextInputEvent,
     desktop::{MenuItem, Shortcut},
     geometry::Points,
     keymap::{self, KeyMatch, Keystroke},
@@ -72,7 +72,8 @@ impl Headless {
     /// defaults below, or none when captured), as a platform sends it. An
     /// uncaptured press goes on to the platform's defaults: the
     /// application menu's shortcuts, a window's Escape, the context-menu
-    /// keys, Tab, Enter and Space pressing the pressable, and Escape going
+    /// keys, Tab, Enter and Space pressing the pressable, text
+    /// (`on_text_input`) where the view listens for it, and Escape going
     /// back. Elsewhere the focused input takes a character, Backspace or
     /// the return key, and Escape goes back as the desktops' back key does
     /// when there is something to go back from.
@@ -209,6 +210,20 @@ impl Headless {
                     for kind in [EventKind::PressDown, EventKind::PressUp, EventKind::Press] {
                         self.send(view, kind, EventPayload::None);
                     }
+                    break 'defaults;
+                }
+                // Text goes to the focused view that listens for it, once
+                // no shortcut, capture or activation kept the press: what
+                // the key types.
+                if let Some(view) = self.screen.key_focus()
+                    && self.screen.hears(view, EventKind::TextInput)
+                    && let Some(text) = typed_text(&stroke)
+                {
+                    self.send(
+                        view,
+                        EventKind::TextInput,
+                        EventPayload::TextInput(TextInputEvent::new(text)),
+                    );
                     break 'defaults;
                 }
                 if let Some(input) = self.screen.focused() {

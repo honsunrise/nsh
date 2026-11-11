@@ -263,6 +263,7 @@ events! {
     WebEvaluation = "onWebEvaluation" as "": "A native WebView evaluation reply (internal; payload: id and a JSON envelope string data).",
     KeyDown = "onKeyDown" as "": "A hardware key went down on a focused Rust view (payload: [`EventPayload::Key`]); asynchronous notifications reach its listening ancestors within the window.",
     KeyUp = "onKeyUp" as "": "A hardware key was released after going down on a focused Rust view (payload: [`EventPayload::Key`]).",
+    TextInput = "onTextInput" as "": "Text was committed to the focused Rust view by typing or an input method (payload: [`EventPayload::TextInput`]); a captured key commits nothing.",
 }
 
 /// What an input holds, for the system's autofill and suggestions
@@ -930,6 +931,8 @@ pub enum EventPayload {
     Wheel(WheelEvent),
     /// A hardware key transition on a focused Rust view.
     Key(crate::KeyEvent),
+    /// Text committed to a focused Rust view by typing or an input method.
+    TextInput(crate::TextInputEvent),
     /// Where the pointer was at a press (`onPress`, `onLongPress`,
     /// `onPressDown`, `onPressUp`), with the modifier keys and the click
     /// count, on backends that know it.
@@ -3039,6 +3042,12 @@ pub enum Prop {
     /// Hardware keys captured by a Rust view or a focused descendant.
     #[prop(reset = Prop::KeyCapture(crate::KeyCapture::None))]
     KeyCapture(crate::KeyCapture),
+    /// `imeCursorArea`: where an input method shows its candidate window
+    /// while a view that listens to `on_text_input` has the keyboard focus,
+    /// in the view's own coordinates (Rust: `ime_cursor_area`). Unset, the
+    /// platform puts it at the view's origin.
+    #[prop(reset = Prop::ImeCursorArea(None))]
+    ImeCursorArea(Option<Bounds<Points>>),
     /// `selectable` of a view: the texts in it share one selection, as a
     /// browser page's do ([`crate::selection`]); texts with
     /// `selectable={false}` stay out of it, a selectable view inside

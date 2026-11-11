@@ -216,8 +216,8 @@ pub use crate::{
     ModalAnimation, ModalPresentation, MouseButton, MouseEvent, NamedKey, PanActivation,
     PasteBehavior, PasteEvent, PastedFile, PointerEvents, PointerType, PressEvent, ResizeMode,
     ReturnKeyType, RevealOptions, ScreenAnimation, ScrollAlignment, SnapAlignment, StatusBarConfig,
-    StatusBarSetting, StatusBarStyle, SubmitBehavior, TextShadow, TouchEvent, TransformKind,
-    TransformOrigin, Viewability, WheelDelta, WheelEvent,
+    StatusBarSetting, StatusBarStyle, SubmitBehavior, TextInputEvent, TextShadow, TouchEvent,
+    TransformKind, TransformOrigin, Viewability, WheelDelta, WheelEvent,
     animation::{
         Curve, EaseMode, Easing, Extrapolate, Keyframe, KeyframeTiming, MotionChannel, MotionKind,
         MotionPreset, MotionSpec, Output as AnimationOutput, PlaybackDirection, StaggerFrom,

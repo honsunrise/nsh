@@ -1305,6 +1305,9 @@ fn payload_object<'js>(cx: &Ctx<'js>, payload: &EventPayload) -> rquickjs::Resul
             obj.set("deltaMode", e.delta.mode_name())?;
             obj.set("modifiers", modifiers_object(cx, &e.modifiers)?)?;
         }
+        // Raw view input has typed Rust listeners, not TS event handlers;
+        // the payload stays accurate for inspection.
+        EventPayload::TextInput(e) => obj.set("text", e.text.as_str())?,
         EventPayload::ContextMenu(e) => {
             obj.set("position", point_object(cx, e.position)?)?;
             obj.set("pagePosition", point_object(cx, e.page_position)?)?;

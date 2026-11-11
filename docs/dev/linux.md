@@ -166,23 +166,40 @@ report nothing: the key being handled is kept until the main loop is idle, and `
 
 ### Custom Rust views
 
-`keyboard.rs` adds hardware key notifications to the existing focus path in `key_focus.rs`.
+`keyboard.rs` adds hardware key notifications and input-method text to the existing focus path in `key_focus.rs`.
 An app-rendered view can forward physical keycodes, current-layout logical keys, repeats and releases to its
 own interaction engine through `Interactive::on_key_down` and `on_key_up`. These are asynchronous observations;
 `capture_keys` mounts a reactive `KeyCapture` rule so GTK can consume a key without waiting for the engine.
 Omitting the rule on a retained view restores `KeyCapture::None`.
 
 Eligible app shortcuts run first, including their window, repeat and pass-through rules. The raw key path follows,
-then existing native defaults. A captured Tab never arms traversal. Key-down notifications reach listening,
+then an active composition's input method, the application menu's shortcuts, the native defaults and, last,
+ordinary text through the view's input method. During a composition the input method is offered a key before
+activation, so Return commits the composition instead of pressing the view. A captured key commits no text and
+runs no menu shortcut or default. A captured Tab never arms traversal. Key-down notifications reach listening,
 enabled ancestors within the native window; releases return to the original press target and capture decision.
-Window deactivation clears held-key tracking. NSH's native menu popovers observe releases while holding GTK's
-keyboard grab, routing them to the original press target without reporting popup presses as view input. NumLock
-and other layout selectors survive the GTK boundary; only Shift and CapsLock are removed to name the logical key.
-Ordinary views with no raw listener or capture keep the existing fast path. `KeyEvent::text` is a keyval preview;
-native inputs and `Terminal` keep their own text-input behavior.
+A settled window deactivation clears held-key tracking, after GLib idle and an `is_active` recheck, so a native
+popup's transient deactivate/reactivate does not clear it or detach an active composition. NSH's native menu
+popovers observe releases while holding GTK's keyboard grab, routing them to the original press target without
+reporting popup presses as view input. NumLock and other layout selectors survive the GTK boundary; only Shift and
+CapsLock are removed to name the logical key. Ordinary views with no raw listener, capture or text listener keep the
+existing fast path. `KeyEvent::text` is a keyval preview; native inputs and `Terminal` keep their own text-input
+behavior.
+
+Committed text (`on_text_input`) and preedit (`on_composition_change`) come from a `gtk::IMMulticontext` attached to
+the focused stop while it hears either event. The context follows the active window's focus, not an inactive window's
+retained focus; disabling the view, removing its listeners or moving the focus ends a pending composition and
+detaches it. The preedit is kept even when the app only listens for committed text, so composition keys still reach
+the input method. The context is offered the releases of the keycodes it filtered, never another view's, and a
+composition commit is reported asynchronously through the engine channel. `ViewProps::ime_cursor_area` (Rust:
+`Interactive::ime_cursor_area`, an `Option<Bounds<Points>>`) places the candidate window in the view's coordinates;
+clearing it, or omitting the prop on a retained view, resets GTK's cursor location to a 1×1 rectangle at the view's
+origin rather than leaving the last rectangle. `props_changed` and `events_changed` in `mount.rs` keep the context
+and its cursor location current. The deferred deactivation keeps a popup's grab cycle from detaching it.
 
 The API belongs to Rust UI sets, with Linux and Linux-desktop headless providers. A TSX app can use an app-specific
-Rust component that forwards the events it needs. The shared cross-platform `onWheel` API and its `deltaMode`
+Rust component that forwards the events it needs. The headless Linux driver delivers typed characters as
+`TextInputEvent` but has no emulated input method. The shared cross-platform `onWheel` API and its `deltaMode`
 payload stay in `ops.rs`; the headless wheel path uses `input::wheel_listener` and `input::scroll_target`, so an
 observer on or outside a scroll view hears the wheel while that scroll view still scrolls.
 

@@ -17,6 +17,18 @@ These are single-run smoke timings, not a speed benchmark. Native XTest checks s
 defaults, menu ordering, popup-held releases and NumLock. In the native smoke app, a 1,250 ms key callback left
 the GTK 100 ms timer running (12 ticks); capture never waits for that callback.
 
+Custom-view IME (against keyboard-only `29f8ba225`, same Linux debug counter command): ordinary views keep the
+same operation, mount-item and node counts as the keyboard control above.
+
+| Phase | Keyboard only (µs/commit) | With IME (µs/commit) |
+|---|---:|---:|
+| Initial frame | 507 | 492 |
+| Press `+1` | 568 | 438 |
+
+These are also single-run smoke samples. GTK Simple input-method verification committed Unicode text without
+a preedit subscriber, kept Return from activating the view during composition, suppressed text for captured keys,
+and kept native Input composition separate. Reactive cursor-area changes and clearing preserve the retained view.
+
 Retained RichEditor rows (2026-11-08 audit, Linux x86_64, against `058a745a`; dev/test profile with
 `nsh-core` and `nsh-base` at `opt-level=3`, `ApproxTextEngine`). Editing the visible first paragraph with content
 culling enabled, 80 ASCII characters per paragraph, both Core order checks applied together:
