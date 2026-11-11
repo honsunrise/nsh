@@ -671,6 +671,7 @@ impl Mounter {
             | Command::PostMessage(_)
             | Command::SendInput(_)
             | Command::Load(_)
+            | Command::WebViewRequest(_)
             | Command::Seek(_)
             | Command::Native { .. } => {
                 if let Some(view) = view {

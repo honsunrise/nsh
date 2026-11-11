@@ -552,6 +552,7 @@ fn initial_environment() -> Environment {
         web_input: true,
         web_evaluate: true,
         reads_active_descendants: true,
+        webview_requests: true,
         // wgpu, in builds with it, until it finds no GPU.
         shaders: nsh_engine::shader::LINKED,
         ..Environment::default()
