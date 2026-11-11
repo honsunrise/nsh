@@ -297,7 +297,11 @@ mod tests {
     }
 
     fn event(key: Key, modifiers: Modifiers) -> KeyEvent {
-        KeyEvent { key, modifiers, ..Default::default() }
+        KeyEvent {
+            key,
+            modifiers,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -333,7 +337,10 @@ mod tests {
         let text = KeyEvent {
             key: Key::Character("a".into()),
             text: Some("A".into()),
-            modifiers: Modifiers { shift: true, ..Default::default() },
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert!(KeyCapture::keys([stroke("shift+a")]).captures(&text));
@@ -390,7 +397,10 @@ mod tests {
         let slash = KeyEvent {
             key: Key::Character("/".into()),
             text: Some("?".into()),
-            modifiers: Modifiers { shift: true, ..Default::default() },
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert!(KeyCapture::keys([stroke("shift+/")]).captures(&slash));

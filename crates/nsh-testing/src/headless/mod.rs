@@ -4480,6 +4480,7 @@ mod tests {
     fn KeyWindowFocus() -> impl IntoElement {
         let pad_disabled = signal(false);
         let ups = signal(0_u32);
+        let pad = element_ref();
         view()
             .flex_1()
             .child(
@@ -4491,10 +4492,11 @@ mod tests {
                             view().child(
                                 view()
                                     .test_id("pad")
+                                    .element_ref(&pad)
                                     .h(px(40.0))
                                     .focusable(true)
                                     .disabled(move || pad_disabled.get())
-                                    .on_press(move |_: &()| {})
+                                    .on_press(move |_: &()| pad.focus())
                                     .on_key_down(move |e: &KeyEvent| {
                                         if matches!(&e.key, Key::Named(NamedKey::Delete)) {
                                             pad_disabled.set(true);
@@ -4518,20 +4520,20 @@ mod tests {
     fn a_disabled_view_in_the_main_window_is_not_over_another_windows_pad() {
         let mut app = start_linux(Root::of::<KeyWindowFocus>());
         app.first_render().unwrap();
-        // The main window's disabled view does not disable the pad in the
-        // window of its own: Tab reaches it and its keys reach it.
-        app.press_key("tab").unwrap();
+        // Activate the pad's own window; Tab stays within the active window.
+        // The disabled ancestor in the main window must not suppress it.
+        app.press("id:pad").unwrap();
         app.press_key("a").unwrap();
         app.wait_for("ups 1").unwrap();
-        // Disabled itself while it has the focus, the pad takes nothing
-        // more: no release.
+        // Its already-queued release arrives, but a disabled pad takes
+        // no subsequent press/release pair.
         app.press_key("delete").unwrap();
         app.wait_for("ups 2").unwrap();
         app.press_key("b").unwrap();
         app.wait_for("ups 2").unwrap();
-        // Enabled again, Tab takes the focus back and its keys reach it.
+        // Enable it from the main window, then activate its own window again.
         app.press("id:enable").unwrap();
-        app.press_key("tab").unwrap();
+        app.press("id:pad").unwrap();
         app.press_key("c").unwrap();
         app.wait_for("ups 3").unwrap();
     }

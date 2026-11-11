@@ -20,8 +20,8 @@
 //!
 //! A view that hears none of the raw keys and captures none takes
 //! [`crate::key_focus`]'s original path: [`listens`] is a few mask
-//! checks, and no [`KeyEvent`], no key state and no allocation is made for
-//! its keys.
+//! checks, with no raw [`KeyEvent`] or down-target allocation. Modifier
+//! transitions remain tracked across focus moves, including from native inputs.
 
 use std::cell::RefCell;
 
@@ -149,6 +149,22 @@ pub(crate) fn layout(event: Option<&gdk::Event>) -> i32 {
         .map_or(0, |event| event.layout() as i32)
 }
 
+/// Keeps GDK's private modifier bits (including X11 NumLock), which the
+/// gtk-rs flags conversion discards before invoking key callbacks.
+pub(crate) fn modifier_state(
+    event: Option<&gdk::Event>,
+    fallback: gdk::ModifierType,
+) -> gdk::ModifierType {
+    use glib::translate::ToGlibPtr;
+
+    event.map_or(fallback, |event| {
+        // SAFETY: the borrowed event owns this valid GdkEvent pointer for
+        // the duration of the call; the getter returns a value, not storage.
+        let bits = unsafe { gdk::ffi::gdk_event_get_modifier_state(event.to_glib_none().0) };
+        gdk::ModifierType::from_bits_retain(bits)
+    })
+}
+
 /// The modifier a modifier key stands for.
 fn modifier_mask(keyval: gdk::Key) -> Option<gdk::ModifierType> {
     use gdk::ModifierType as M;
@@ -222,9 +238,10 @@ pub(crate) fn released(
             .get(&keycode)
             .is_some_and(|held| held.upgrade().as_ref() == Some(window))
     });
-    if held_here {
-        surface.keyboard.pressed.borrow_mut().remove(&keycode);
+    if !held_here {
+        return;
     }
+    surface.keyboard.pressed.borrow_mut().remove(&keycode);
     let Some((weak, captured)) = surface.keyboard.down_targets.borrow_mut().remove(&keycode) else {
         return;
     };
@@ -262,14 +279,12 @@ pub(crate) fn key_event(
         KeyPhase::Up => (false, false),
     };
     let display = view.display();
-    // The layout's unshifted character names the key (`group` is the
-    // event's active keyboard layout); Shift only changes the text
-    // (`Shift+A` is `Character("a")` typing `"A"`).
+    // Remove character case/Shift, not NumLock or layout-level selectors:
+    // an unshifted numeric keypad key is still a digit with NumLock on.
+    let unshifted = state.difference(gdk::ModifierType::SHIFT_MASK | gdk::ModifierType::LOCK_MASK);
     let base = display
         .translate_key(keycode, state, group)
-        .and_then(|(_, group, _, _)| {
-            display.translate_key(keycode, gdk::ModifierType::empty(), group)
-        })
+        .and_then(|(_, group, _, _)| display.translate_key(keycode, unshifted, group))
         .map(|(base, ..)| base);
     let key = base.map_or(Key::Named(NamedKey::Unidentified), key_of);
     let modifiers = crate::input::modifiers(effective_modifiers(surface, state, keyval));
@@ -459,6 +474,57 @@ mod tests {
             // A non-modifier key keeps the masks GDK gave it.
             let held = event(gdk::Key::a, M::SHIFT_MASK | M::CONTROL_MASK, false, true);
             assert!(held.modifiers.shift && held.modifiers.ctrl);
+        });
+    }
+
+    #[test]
+    fn numlock_preserves_numeric_keypad_keys_and_capture() {
+        run(|| {
+            let surface = surface();
+            apply(
+                &surface,
+                &[MountItem::Create {
+                    id: 2,
+                    kind: ViewKind::View,
+                }],
+            );
+            let view = view(&surface, 2);
+            let display = view.display();
+            // X11's NumLock uses Mod2, a private GDK modifier bit which
+            // must survive removing Shift and CapsLock.
+            if display.type_().name() != "GdkX11Display" {
+                return;
+            }
+            let keycode = display.map_keyval(gdk::Key::KP_1).unwrap()[0].keycode();
+            let numlock = gdk::ModifierType::from_bits_retain(1 << 4);
+            let numeric = key_event(
+                &surface,
+                &view,
+                gdk::Key::KP_1,
+                keycode,
+                numlock,
+                KeyPhase::Down { repeat: false },
+                0,
+            );
+            assert_eq!(numeric.key, Key::Character("1".into()));
+            assert_eq!(numeric.text.as_deref(), Some("1"));
+            let capture =
+                nsh_core::KeyCapture::keys([
+                    nsh_core::keymap::Keystroke::parse_with("1", false).unwrap()
+                ]);
+            assert!(capture.captures(&numeric));
+            let navigation = key_event(
+                &surface,
+                &view,
+                gdk::Key::KP_End,
+                keycode,
+                gdk::ModifierType::empty(),
+                KeyPhase::Down { repeat: false },
+                0,
+            );
+            assert_eq!(navigation.key, Key::Named(NamedKey::End));
+            assert_eq!(navigation.text, None);
+            assert!(!capture.captures(&navigation));
         });
     }
 

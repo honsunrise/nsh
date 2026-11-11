@@ -23735,9 +23735,9 @@ fn retained_views_clear_omitted_capture_rules() {
         view()
             .on_press(move || configured.set(false))
             .child(dynamic(move || {
-                view().key("pad").when(configured.get(), |view| {
-                    view.capture_keys(KeyCapture::All)
-                })
+                view()
+                    .key("pad")
+                    .when(configured.get(), |view| view.capture_keys(KeyCapture::All))
             }))
     }
 

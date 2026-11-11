@@ -7,13 +7,19 @@
 //! One key controller per window, in GTK's capture phase, decides a press
 //! in this order: the app's shortcuts, the focused view's `KeyDown`
 //! (reported to the engine, never waited for) with its `capture_keys` rules
-//! ([`crate::keyboard`]), then the defaults of this module. A view that
-//! hears raw keys runs the app's bindings itself, once
+//! ([`crate::keyboard`]), the application menu's shortcuts
+//! ([`crate::chrome::menu_shortcut`]), then the defaults of this module. A
+//! view that hears raw keys runs the app's bindings itself, once
 //! ([`crate::keymap::raw`]), and its shortcut's action skips that press;
-//! other views leave the shortcuts to the `ShortcutController`, as before.
-//! A captured key is reported (`KeyEvent::captured`) and runs none of the
-//! defaults: no traversal, activation or context menu. A key that only
-//! listens runs them as before.
+//! other views leave the shortcuts to the app's `ShortcutController`, as
+//! before. A captured key is reported (`KeyEvent::captured`) and runs none
+//! of the menu's shortcuts or defaults: no traversal, activation or context
+//! menu. A key that only listens runs them as before.
+//!
+//! A native popup (a context menu, the menu bar's menus, their nested
+//! submenus) grabs the keyboard: its releases never reach the window's
+//! controller. [`observe_popovers`] watches them where they are delivered,
+//! so a key held while a menu opens still releases its original target.
 //!
 //! Views stay unfocusable until Tab or `focus()` picks them: GTK also
 //! hands the focus around by itself (to the first focusable widget as a
@@ -97,7 +103,8 @@ pub(crate) fn blur(view: &NshView) -> bool {
 
 /// Follows the focus of the surface's window, and takes the keys of a
 /// focused stop: the app's shortcuts first, then the view's raw keys and
-/// capture rules, then the defaults of this module (see [`press`]).
+/// capture rules, then the application menu's shortcuts and the defaults
+/// of this module (see [`press`]).
 pub(crate) fn install(surface: &Rc<Surface>) {
     let weak = Rc::downgrade(surface);
     let installed = RefCell::new(glib::WeakRef::<gtk::Window>::new());
@@ -146,6 +153,8 @@ pub(crate) fn watch(surface: &Rc<Surface>, window: &gtk::Window) {
                 .widget()
                 .and_then(|widget| widget.root())
                 .and_then(|root| root.downcast::<gtk::Window>().ok());
+            let modifiers =
+                crate::keyboard::modifier_state(keys.current_event().as_ref(), modifiers);
             crate::keyboard::released(
                 &surface,
                 window.as_ref(),
@@ -164,9 +173,18 @@ pub(crate) fn watch(surface: &Rc<Surface>, window: &gtk::Window) {
         if window.is_active() {
             return;
         }
-        if let Some(surface) = inactive.upgrade() {
-            crate::keyboard::window_deactivated(&surface, window);
-        }
+        // GTK's native popovers can briefly deactivate and reactivate the
+        // host while taking their grab. Clear only a settled loss of focus,
+        // after the pending focus events, not that in-window round trip.
+        let inactive = inactive.clone();
+        let window = window.downgrade();
+        glib::idle_add_local_once(move || {
+            if let (Some(surface), Some(window)) = (inactive.upgrade(), window.upgrade())
+                && !window.is_active()
+            {
+                crate::keyboard::window_deactivated(&surface, &window);
+            }
+        });
     });
     let weak = Rc::downgrade(surface);
     let current = RefCell::new(None::<NshView>);
@@ -183,6 +201,89 @@ fn focused_stop(surface: &Surface, focus: Option<gtk::Widget>) -> Option<NshView
         .and_downcast::<NshView>()
         .filter(|view| crate::window::holds(surface, view))
         .filter(is_stop)
+}
+
+/// Watches the keys a native popup receives while it owns the keyboard
+/// grab: a context menu, the menu bar's menus and their nested submenus
+/// (`GtkPopoverMenu`s), all under `widget`.
+///
+/// A popover's grab delivers keys to its own native surface, and GTK stops
+/// their propagation at the grab (`gtk_propagate_event_internal`), so the
+/// window's key controller never sees them: a key held when a menu opens
+/// would never release. Here a press only tracks a modifier (no view hears
+/// the popup's keys); a release ends the hold on the view the key went down
+/// on ([`crate::keyboard::released`]), in the window the popover belongs
+/// to. Nothing is reported for a key that went down in the popup, and
+/// opening a popup emits nothing by itself.
+pub(crate) fn observe_popovers(surface: &Rc<Surface>, widget: &gtk::Widget) {
+    if let Some(popover) = widget.downcast_ref::<gtk::Popover>()
+        && !popover_watched(surface, popover)
+    {
+        // The default `SameNative` propagation limit is what this needs:
+        // the popover's own native surface delivers the keys, and its
+        // widget tree is the one they propagate through.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let pressed = Rc::downgrade(surface);
+        keys.connect_key_pressed(move |_, keyval, keycode, _| {
+            if let Some(surface) = pressed.upgrade() {
+                crate::keyboard::track_modifiers(&surface, keyval, keycode, true);
+            }
+            glib::Propagation::Proceed
+        });
+        let released = Rc::downgrade(surface);
+        keys.connect_key_released(move |keys, keyval, keycode, modifiers| {
+            let window = host(keys.widget().as_ref());
+            if let (Some(surface), Some(window)) = (released.upgrade(), window) {
+                let modifiers =
+                    crate::keyboard::modifier_state(keys.current_event().as_ref(), modifiers);
+                crate::keyboard::released(
+                    &surface,
+                    Some(&window),
+                    keyval,
+                    keycode,
+                    modifiers,
+                    crate::keyboard::layout(keys.current_event().as_ref()),
+                );
+            }
+        });
+        popover.add_controller(keys);
+    }
+    // Nested menus are popovers of their own (children of their items),
+    // each with its own native surface and grab.
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        observe_popovers(surface, &current);
+        child = current.next_sibling();
+    }
+}
+
+/// Whether `popover` already has a release watcher (marking it when not):
+/// walking a menu again, or a popover another menu adopted, adds none.
+fn popover_watched(surface: &Surface, popover: &gtk::Popover) -> bool {
+    let mut popovers = surface.chrome.popovers.borrow_mut();
+    popovers.retain(|watched| watched.upgrade().is_some());
+    if popovers
+        .iter()
+        .any(|watched| watched.upgrade().as_ref() == Some(popover))
+    {
+        return true;
+    }
+    popovers.push(popover.downgrade());
+    false
+}
+
+/// The window a popover belongs to: a popover's own root is the popover,
+/// so its host's parents lead to the window it pops over.
+fn host(widget: Option<&gtk::Widget>) -> Option<gtk::Window> {
+    let mut widget = widget?.parent();
+    while let Some(current) = widget {
+        if let Some(window) = current.downcast_ref::<gtk::Window>() {
+            return Some(window.clone());
+        }
+        widget = current.parent();
+    }
+    None
 }
 
 /// The window's focus moved: the stop it left and the one it reached say so.
@@ -203,15 +304,16 @@ fn moved(surface: &Surface, window: &gtk::Window, current: &RefCell<Option<NshVi
     }
 }
 
-/// A key on its way to the focus: the app's shortcuts first (GTK's
+/// A key on its way to the focus: the app's shortcuts first (the app's
 /// `ShortcutController` runs right after this, when the key is the app's),
-/// then the focused view's `KeyDown` and capture rules, then the defaults
-/// (Tab's traversal, Return and Space pressing, a context menu). True when
-/// the key is consumed.
+/// then the focused view's `KeyDown` and capture rules, then the
+/// application menu's shortcuts ([`crate::chrome::menu_shortcut`]), then
+/// the defaults (Tab's traversal, Return and Space pressing, a context
+/// menu). True when the key is consumed.
 ///
 /// A focused view whose ancestry hears none of the raw keys and captures
-/// none takes the original path: [`defaults`] alone, with no [`KeyEvent`]
-/// built and no per-key state.
+/// none builds no raw [`KeyEvent`] and records no down target; the app's
+/// bindings, the menu and [`defaults`] decide. Modifier transitions stay tracked.
 pub(crate) fn press(
     surface: &Rc<Surface>,
     widget: Option<&gtk::Widget>,
@@ -221,6 +323,9 @@ pub(crate) fn press(
     modifiers: gdk::ModifierType,
     group: i32,
 ) -> bool {
+    // GDK's typed state drops private modifiers (NumLock's Mod2): take the
+    // raw state so a keypad key keeps typing its digit.
+    let modifiers = crate::keyboard::modifier_state(event, modifiers);
     // Every key the window gets passes here first (the capture phase),
     // before it acts: the focus it moves shows (`focus-visible:`). A
     // modifier alone does not count.
@@ -244,18 +349,34 @@ pub(crate) fn press(
         .as_ref()
         .and_then(|root| root.clone().downcast::<gtk::Window>().ok());
     let focus = root.and_then(|root| root.focus());
+    // The application menu's shortcut, where a view leaves the key to it.
+    let menu_shortcut = || match (event, widget) {
+        (Some(event), Some(widget)) => crate::chrome::menu_shortcut(surface, widget, event),
+        _ => false,
+    };
     let Some(view) = focused_stop(surface, focus) else {
-        if is_tab(keyval) && !event.is_some_and(|event| crate::keymap::claims(surface, event)) {
+        // A native field (or no focus) has no view to notify: the app's
+        // bindings first, then the menu's shortcuts, then Tab's traversal.
+        if event.is_some_and(|event| crate::keymap::claims(surface, event)) {
+            return false;
+        }
+        if menu_shortcut() {
+            return true;
+        }
+        if is_tab(keyval) {
             arm_tab();
         }
         return false;
     };
     if !crate::keyboard::listens(&view) {
-        // A view with no raw keys: the app's shortcuts are the shortcut
-        // controller's, as they always were (a menu's trigger opens at its
-        // first item with Return, and the controller runs right after this).
+        // A view with no raw keys keeps the original path: the app's
+        // bindings (GTK's controller) first, then the menu's shortcut,
+        // then the defaults.
         if event.is_some_and(|event| crate::keymap::claims(surface, event)) {
             return false;
+        }
+        if menu_shortcut() {
+            return true;
         }
         return defaults(surface, &view, keyval, modifiers);
     }
@@ -287,7 +408,13 @@ pub(crate) fn press(
     key_event.captured = captured;
     crate::keyboard::notify(surface, &view, key_event);
     if captured {
-        // The view took the key: no traversal, activation or context menu.
+        // The view took the key: no menu shortcut, traversal, activation or
+        // context menu.
+        return true;
+    }
+    // The application menu's shortcuts come before the defaults: a menu's
+    // key is the app's, not a traversal or a context menu.
+    if menu_shortcut() {
         return true;
     }
     // Tab's traversal is a default too: it is armed here, then GTK moves the
@@ -379,8 +506,7 @@ fn show_context_menu(surface: &Surface, view: &NshView) -> bool {
 mod tests {
     use nsh_core::{
         EventMask, KeyCapture, KeyEvent, MountItem, NamedKey, NodeId, ROOT_ID, ViewProps,
-        keymap::Keystroke,
-        platform::Os,
+        keymap::Keystroke, platform::Os,
     };
 
     use super::*;
@@ -784,5 +910,186 @@ mod tests {
             assert!(!first.is_focus());
             window.destroy();
         });
+    }
+
+    #[cfg(feature = "dev")]
+    mod menus {
+        use nsh_core::{
+            desktop::{DesktopCommand, MenuAction, MenuItem, MenuRole, Shortcut},
+            keymap::When,
+        };
+
+        use super::*;
+
+        /// Whether the tests' display is X11 (real keys need XTest).
+        fn x11() -> bool {
+            gdk::Display::default().is_some_and(|display| display.type_().name() == "GdkX11Display")
+        }
+
+        /// A menu item with Ctrl+N that does `role`.
+        fn menu_item(role: MenuRole) -> MenuItem {
+            MenuItem::Action(MenuAction {
+                id: 1,
+                label: "Test".into(),
+                shortcut: Some(Shortcut::parse("mod+n", false).expect("a shortcut")),
+                enabled: true,
+                checked: None,
+                role: Some(role),
+                when: When::Auto,
+                icon: None,
+            })
+        }
+
+        /// The application menu of `surface`: one Ctrl+N item with `role`.
+        fn set_menu(surface: &Rc<Surface>, role: MenuRole) {
+            crate::chrome::command(
+                surface,
+                &DesktopCommand::SetMenu(Some(vec![menu_item(role)].into())),
+            );
+        }
+
+        #[test]
+        fn a_capture_takes_an_application_menu_key() {
+            run(|| {
+                if !x11() {
+                    return;
+                }
+                let surface = surface();
+                views(&surface);
+                let window = show(&surface);
+                let first = view(&surface, 2);
+                assert!(wait_until(|| first.is_mapped()));
+                focus(&first);
+                assert!(first.is_focus());
+                let mut events = EventMask::default();
+                events.set(EventKind::Press, true);
+                events.set(EventKind::KeyDown, true);
+                apply(&surface, &[MountItem::Events { id: 2, events }]);
+                props(&surface, 2, |props| props.key_capture = KeyCapture::All);
+                set_menu(&surface, MenuRole::Close);
+                let n = keycode(gdk::Key::n);
+                crate::xtest::Xtest::with(|x| {
+                    x.focus(&window);
+                    assert!(wait_until(|| window.is_active()));
+                    assert!(x.key(crate::xtest::CONTROL_L, true));
+                    assert!(x.key(crate::xtest::char_keysym('n'), true));
+                    assert!(
+                        wait_until(|| crate::keyboard::down_target(&surface, n) == Some(2)),
+                        "the capture hears the key the application menu also binds"
+                    );
+                    assert!(window.is_visible(), "the menu action did not run");
+                    assert!(x.key(crate::xtest::char_keysym('n'), false));
+                    assert!(x.key(crate::xtest::CONTROL_L, false));
+                })
+                .expect("real XTest is required");
+                assert!(wait_until(
+                    || crate::keyboard::down_target(&surface, n).is_none()
+                ));
+                window.destroy();
+            });
+        }
+
+        #[test]
+        fn the_application_menu_runs_without_a_focused_view() {
+            run(|| {
+                if !x11() {
+                    return;
+                }
+                let surface = surface();
+                views(&surface);
+                let window = show(&surface);
+                let first = view(&surface, 2);
+                assert!(wait_until(|| first.is_mapped()));
+                assert!(GtkWindowExt::focus(&window).is_none());
+                set_menu(&surface, MenuRole::Close);
+                crate::xtest::Xtest::with(|x| {
+                    x.focus(&window);
+                    assert!(wait_until(|| window.is_active()));
+                    assert!(x.stroke(&[crate::xtest::CONTROL_L], crate::xtest::char_keysym('n')));
+                })
+                .expect("real XTest is required");
+                assert!(
+                    wait_until(|| !window.is_visible()),
+                    "a menu shortcut still works where no view hears keys"
+                );
+            });
+        }
+
+        #[test]
+        fn a_popover_grab_releases_the_key_it_held() {
+            run(|| {
+                if !x11() {
+                    return;
+                }
+                let surface = surface();
+                views(&surface);
+                let window = show(&surface);
+                let first = view(&surface, 2);
+                assert!(wait_until(|| first.is_mapped()));
+                let group = gtk::gio::SimpleActionGroup::new();
+                group.add_action(&gtk::gio::SimpleAction::new("item", None));
+                surface.root.insert_action_group("popup", Some(&group));
+                let model = gtk::gio::Menu::new();
+                model.append(Some("Item"), Some("popup.item"));
+                let menu = gtk::PopoverMenu::from_model(Some(&model));
+                menu.set_parent(&surface.root);
+                observe_popovers(&surface, menu.upcast_ref());
+                let k = keycode(gdk::Key::k);
+                let mut events = nsh_core::EventMask::default();
+                events.set(nsh_core::EventKind::KeyDown, true);
+                events.set(nsh_core::EventKind::KeyUp, true);
+                apply(&surface, &[MountItem::Events { id: 2, events }]);
+                props(&surface, 2, |props| props.focusable = Some(true));
+                crate::xtest::Xtest::with(|x| {
+                    x.focus(&window);
+                    assert!(wait_until(|| window.is_active()));
+                    focus(&first);
+                    assert!(wait_until(|| first.is_focus()));
+                    assert!(x.key(crate::xtest::char_keysym('k'), true));
+                    assert!(wait_until(
+                        || crate::keyboard::down_target(&surface, k) == Some(2)
+                    ));
+                    assert!(crate::keyboard::held_key(&surface, k));
+                    menu.popup();
+                    assert!(wait_until(|| menu.is_mapped()));
+                    assert_eq!(
+                        crate::keyboard::down_target(&surface, k),
+                        Some(2),
+                        "opening the popup releases nothing"
+                    );
+                    // A key pressed in the popup is the popup's, not the view's.
+                    let seen = Rc::new(std::cell::Cell::new(false));
+                    let probe = gtk::EventControllerKey::new();
+                    probe.set_propagation_phase(gtk::PropagationPhase::Capture);
+                    let flag = seen.clone();
+                    probe.connect_key_pressed(move |_, key, _, _| {
+                        if key == gdk::Key::j {
+                            flag.set(true);
+                        }
+                        glib::Propagation::Proceed
+                    });
+                    menu.add_controller(probe);
+                    let j = keycode(gdk::Key::j);
+                    assert!(x.key(crate::xtest::char_keysym('j'), true));
+                    assert!(wait_until(|| seen.get()), "the popup hears its key");
+                    assert_eq!(
+                        crate::keyboard::down_target(&surface, j),
+                        None,
+                        "a popup's key is not reported to a view"
+                    );
+                    assert!(x.key(crate::xtest::char_keysym('j'), false));
+                    assert!(x.key(crate::xtest::char_keysym('k'), false));
+                    assert!(
+                        wait_until(|| crate::keyboard::down_target(&surface, k).is_none()),
+                        "the popup's grab passes the release to the original target"
+                    );
+                    assert!(!crate::keyboard::held_key(&surface, k));
+                    menu.popdown();
+                })
+                .expect("real XTest is required");
+                assert!(wait_until(|| !menu.is_visible()));
+                window.destroy();
+            });
+        }
     }
 }

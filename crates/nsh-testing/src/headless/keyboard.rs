@@ -400,7 +400,7 @@ impl Headless {
                     to = None;
                     key = None;
                 }
-                Command::Focus if id != ROOT_ID && self.screen.tab_stops().contains(&id) => {
+                Command::Focus if id != ROOT_ID && self.screen.accepts_key_focus(id) => {
                     to = Some(Some(id));
                     key = Some(id);
                 }
