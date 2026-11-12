@@ -24587,6 +24587,58 @@ fn retained_views_clear_omitted_capture_rules() {
 }
 
 #[test]
+fn key_capture_reads_mounted_rules_with_canonical_strokes() {
+    use crate::{KeyEvent, PhysicalKey, keymap::Keystroke, prelude::*};
+
+    let stroke = Keystroke::parse_with("mod+k", true).unwrap();
+    #[component]
+    fn Captured() -> impl IntoElement {
+        view()
+            .capture_keys(KeyCapture::keys([Keystroke::parse_with("mod+k", true).unwrap()]))
+            .child(view())
+    }
+
+    let mut c = core();
+    c.mount_root(&crate::element::Root::of::<Captured>());
+    let batch = c.commit().unwrap();
+    let host = batch
+        .items
+        .iter()
+        .find_map(|item| match item {
+            MountItem::ViewProps { id, props }
+                if props.key_capture == KeyCapture::keys([stroke]) =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .expect("the capture rule mounts");
+
+    // Command+K on Apple conventions; the same stroke's key with no
+    // modifier is not it.
+    let mut event = KeyEvent::default();
+    event.key = "k".into();
+    event.modifiers.cmd = true;
+    assert!(c.key_captured(host, &event));
+    event.modifiers = crate::keymap::Modifiers::default();
+    assert!(!c.key_captured(host, &event));
+
+    // The physical code is the US-layout key, whatever the layout types.
+    let mut cyrillic = KeyEvent::default();
+    cyrillic.key = "л".into();
+    cyrillic.physical = Some(PhysicalKey::Code("KeyK".into()));
+    cyrillic.modifiers.cmd = true;
+    assert!(c.key_captured(host, &cyrillic));
+
+    // The path reaches the focused view and its ancestors, ending at the
+    // window's root.
+    let mut path = Vec::new();
+    c.key_path(host, &mut path);
+    assert_eq!(path.first(), Some(&host));
+    assert_eq!(path.last(), Some(&crate::ROOT_ID));
+}
+
+#[test]
 fn context_menus_reach_rust_listeners_with_their_positions() {
     use crate::prelude::*;
     #[component]
@@ -27954,6 +28006,47 @@ fn image_scales_decode_from_js() {
         "url": "asset:/a.png", "scales": [1, 1, 1, 1, 1, 1, 1, 1, 2]
     }));
     assert_eq!(long.unwrap().scales.iter().collect::<Vec<_>>(), [1.0]);
+}
+
+/// `captureKeys` decodes through the one host decoder, parsing each
+/// keystroke once with the platform's `mod`.
+#[test]
+fn capture_keys_decode_from_js() {
+    use crate::{KeyCapture, js::host::HostValue, keymap::Keystroke};
+
+    let decode = |value: serde_json::Value, apple: bool| {
+        KeyCapture::decode(
+            &J(value),
+            &mut crate::js::host::HostCx::default().with_apple_keyboard(apple),
+        )
+    };
+    assert_eq!(decode(serde_json::json!("none"), false), Some(KeyCapture::None));
+    assert_eq!(decode(serde_json::json!("all"), true), Some(KeyCapture::All));
+    assert_eq!(
+        decode(serde_json::json!(["mod+k", "shift+tab"]), true),
+        Some(KeyCapture::keys([
+            Keystroke::parse_with("mod+k", true).unwrap(),
+            Keystroke::parse_with("shift+tab", true).unwrap(),
+        ]))
+    );
+    // `mod` is Control where conventions are not Apple's.
+    assert_eq!(
+        decode(serde_json::json!(["mod+k"]), false),
+        Some(KeyCapture::keys([Keystroke::parse_with("mod+k", false).unwrap()]))
+    );
+    // Nothing and unknown strings clear the rule; invalid keystrokes are
+    // reported and left out.
+    assert_eq!(decode(serde_json::Value::Null, false), None);
+    let mut cx = crate::js::host::HostCx::default().with_apple_keyboard(false);
+    let decoded = KeyCapture::decode(
+        &J(serde_json::json!(["a", "not+a+key"])),
+        &mut cx,
+    );
+    assert_eq!(
+        decoded,
+        Some(KeyCapture::keys([Keystroke::parse_with("a", false).unwrap()]))
+    );
+    assert!(cx.warnings.iter().any(|w| w.contains("captureKeys")));
 }
 
 #[test]

@@ -451,6 +451,18 @@ pub(crate) fn decode_prop<'js>(
         return Ok(Some(Op::SetStyle { id, style, patch }));
     }
     let mut cx = tag.map_or_else(HostCx::default, HostCx::for_element);
+    // `captureKeys` holds keystrokes: `mod` is Command where the platform
+    // follows Apple's conventions.
+    if name == "captureKeys" {
+        let ctx = value.ctx();
+        let raw = ctx.as_raw().as_ptr();
+        // SAFETY: the app's state, for this call into JS.
+        let os = unsafe { &(*crate::state::state(raw)).dom }.os();
+        cx = cx.with_apple_keyboard(nsh_core::keymap::apple_keys(
+            os,
+            crate::env::current(raw).apple_keyboard,
+        ));
+    }
     let input = Js(value);
     let decoded = <Prop as HostProps>::decode(name, &input, &mut cx);
     for message in cx.warnings {

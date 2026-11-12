@@ -86,7 +86,6 @@ pub use crate::element::{
     JsError,
     JsObject,
     JsValue,
-    Key,
     KeyCapture,
     KeyEvent,
     // Scrolling and lists.
@@ -123,7 +122,6 @@ pub use crate::element::{
     MotionSpec,
     MouseButton,
     MouseEvent,
-    NamedKey,
     NativeEvent,
     NativeView,
     NoEvent,
@@ -139,6 +137,7 @@ pub use crate::element::{
     PasteEvent,
     PastedFile,
     Percentage,
+    PhysicalKey,
     PinchEvent,
     PinchPhase,
     Placement,

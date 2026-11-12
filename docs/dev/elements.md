@@ -369,6 +369,19 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   view, after the input method) through `Native.keyDown` / `keyUp`, the table kept in Rust (`keymap.rs`), never
   encoded for Java. Both leave a composing input method its keys and consume a taken key's release too. Rust views' bindings (`on_key`) join JS's in that one table, and the core runs
   their handlers (`docs/dev/components.md`).
+- **Raw key notifications** (`onKeyDown` / `onKeyUp`, Rust `Interactive::on_key_down` / `on_key_up`): a platform
+  sends ONE `EventPayload::Key` at the focused view. The engine's common routing takes the core's window-bounded,
+  enabled path (`Core::key_path`) and notifies Rust component listeners and JS listeners once each per view, for
+  both transitions; no backend sends an event per ancestor. `KeyEvent` carries the source's raw logical key
+  (`SharedString`), its text preview, an optional `PhysicalKey` (`Native(u32)` or the DOM's `Code`), modifiers,
+  repeat and capture decision. `KeyCapture` (JS `captureKeys`) stores canonical `Keystroke`s, decoded once by the
+  shared host decoder with the platform's `mod`; matching uses `KeyEvent::keystroke(os)` (a native code or DOM
+  `code` placed on the US layout, else the reported key) and `KeyCapture::captures` / `captures_key`. Native
+  backends decide `captured` from their mounted props before defaults; an in-process host (the browser) calls
+  `LocalEngine::key_event`, which computes and routes synchronously. A focused native text input keeps the keys
+  that edit it (nothing an ancestor captures intercepts its typing or editing). A legacy terminal reports only
+  strokes: no invented releases, repeats or physical codes. Losing the window's focus clears held state and
+  synthesizes nothing; a real release is reported where the focus is, as the DOM does.
 - **System UI**: the status bar follows UIKit, where the topmost view controller's `preferredStatusBarStyle` decides
   and Info.plist holds the default: a page's or dialog's `statusBar` (`{ foreground, hidden, animated }`, a host prop
   of screens and modals, `ScreenProp::StatusBar`, decoded to a `StatusBarSetting`; `Screen::status_bar` /

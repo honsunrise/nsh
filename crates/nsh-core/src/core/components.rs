@@ -15,7 +15,7 @@ use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{Core, Kind, NO_KEY, views::Anchor};
+use super::{Core, Key, Kind, NO_KEY, views::Anchor};
 use crate::{
     ApplyError, Command, EdgeInsets, EventKind, EventMask, EventPayload, NodeId, Op, Prop, ROOT_ID,
     Tag, TextEngine,
@@ -4988,36 +4988,93 @@ impl<M: TextEngine> Core<M> {
     /// own parts' events never reach JS, which does not know them).
     pub fn component_event(&mut self, id: NodeId, kind: EventKind, payload: &EventPayload) -> bool {
         let _entered = self.components.runtime.enter();
-        let handled = if kind == EventKind::KeyDown {
-            // Native capture was decided from mounted props. These are
-            // notifications, not a request for a synchronous answer.
-            let mut next = Some(id);
-            let mut heard = false;
-            while let Some(id) = next {
-                let Ok(key) = self.key(id) else {
-                    break;
-                };
-                let node = &self.nodes[key as usize];
-                // A native window is a keyboard boundary even when its
-                // declarative root remains in another window's logical tree.
-                let window_root = node.kind == Kind::Modal
-                    && self.window_ids.values().any(|(root, _)| *root == id);
-                next = (node.parent != NO_KEY && !window_root)
-                    .then(|| self.nodes[node.parent as usize].id);
-                let disabled = node
-                    .props
-                    .as_ref()
-                    .is_some_and(|p| p.accessibility.state.disabled);
-                if !disabled {
-                    heard |= self.dispatch_event(id, kind, payload);
-                }
-            }
-            heard
-        } else {
-            self.dispatch_event(id, kind, payload)
-        };
+        let handled = self.dispatch_event(id, kind, payload);
         self.flush_component_emits();
         handled
+    }
+
+    /// Whether node `id` has a listener for `event` (a JS handler or a Rust
+    /// component's), as the platform sees it mounted. The engine skips
+    /// nodes without one when it fans a key notification out.
+    pub fn listens(&self, id: NodeId, event: EventKind) -> bool {
+        self.key(id)
+            .is_ok_and(|key| self.nodes[key as usize].mounted_events().contains(event))
+    }
+
+    /// The views a key notification on `id` reaches, in order: `id`, then
+    /// each enabled ancestor, up to and including the root of `id`'s window.
+    /// The engine notifies every one of them (Rust and JS listeners alike)
+    /// from one platform event; a native window is a keyboard boundary even
+    /// when its declarative root remains in another window's logical tree.
+    /// A disabled view hears nothing, and its enabled ancestors still do.
+    pub fn key_path(&self, id: NodeId, out: &mut Vec<NodeId>) {
+        out.clear();
+        let Ok(mut key) = self.key(id) else {
+            return;
+        };
+        let window = self.key_window(key);
+        loop {
+            let node = &self.nodes[key as usize];
+            let disabled = node
+                .props
+                .as_ref()
+                .is_some_and(|p| p.accessibility.state.disabled);
+            if !disabled {
+                out.push(node.id);
+            }
+            if node.id == window || node.parent == NO_KEY {
+                return;
+            }
+            key = node.parent;
+        }
+    }
+
+    /// Whether `id` or an enabled ancestor within its window captures
+    /// `event`'s transition under its mounted [`crate::KeyCapture`] rule
+    /// (`captureKeys`). The platform decides before native defaults; a key
+    /// with no canonical shortcut stroke is still captured by
+    /// [`crate::KeyCapture::All`]. A focused native text input keeps the
+    /// keys that edit it: nothing captures them.
+    pub fn key_captured(&self, id: NodeId, event: &crate::KeyEvent) -> bool {
+        let Ok(mut key) = self.key(id) else {
+            return false;
+        };
+        // A native text input owns the keys that edit it: an ancestor's
+        // capture never intercepts its typing, caret or editing commands.
+        if self.nodes[key as usize].kind == Kind::Input {
+            return false;
+        }
+        let keystroke = event.keystroke(self.components.environment.os);
+        let window = self.key_window(key);
+        loop {
+            let node = &self.nodes[key as usize];
+            let disabled = node
+                .props
+                .as_ref()
+                .is_some_and(|p| p.accessibility.state.disabled);
+            if !disabled
+                && node
+                    .props
+                    .as_ref()
+                    .is_some_and(|p| p.key_capture.captures_key(keystroke.as_ref()))
+            {
+                return true;
+            }
+            if node.id == window || node.parent == NO_KEY {
+                return false;
+            }
+            key = node.parent;
+        }
+    }
+
+    /// The root of the window `key` is in, `key` itself when it is one.
+    fn key_window(&self, key: Key) -> NodeId {
+        let node = &self.nodes[key as usize];
+        if node.kind == Kind::Modal && self.window_ids.values().any(|(root, _)| *root == node.id) {
+            node.id
+        } else {
+            self.window_of(key)
+        }
     }
 
     fn flush_component_emits(&mut self) {

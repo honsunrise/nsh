@@ -1586,10 +1586,12 @@ pub trait Interactive: Element {
     }
 
     /// A hardware key went down on this view or a focused descendant.
-    /// Linux delivers the current layout's logical key and physical code
-    /// asynchronously; returning from a listener cannot change handling.
-    /// [`KeyEvent::captured`] reports the decision already made from
-    /// [`Self::capture_keys`]. Named shortcuts keep their priority.
+    /// The event carries the source's logical key name, an optional
+    /// physical code and text preview; returning from a listener cannot
+    /// change handling. [`KeyEvent::captured`] reports the decision made
+    /// from [`Self::capture_keys`]. Notifications bubble to enabled
+    /// listening ancestors within the native window; named shortcuts keep
+    /// their priority.
     fn on_key_down<M>(self, listener: impl IntoListener<KeyEvent, M>) -> Self {
         self.on(
             EventKind::KeyDown,
@@ -1597,9 +1599,11 @@ pub trait Interactive: Element {
         )
     }
 
-    /// The release of a key pressed on this view, with the original capture
-    /// decision. Linux keeps the target across focus moves within an active
-    /// window; window deactivation clears held-key tracking.
+    /// A hardware key came up on the focused view, with the capture
+    /// decision for this transition. It bubbles as [`Self::on_key_down`]
+    /// does. A real release the source reports reaches the focused view
+    /// even when its press went elsewhere; a window that loses the focus
+    /// invents no releases.
     fn on_key_up<M>(self, listener: impl IntoListener<KeyEvent, M>) -> Self {
         self.on(
             EventKind::KeyUp,
@@ -1608,10 +1612,11 @@ pub trait Interactive: Element {
     }
 
     /// Keys consumed on this view or a focused descendant before native
-    /// defaults, using mounted rules rather than a listener's answer.
-    /// Eligible app shortcuts and focused native inputs keep priority.
-    /// Defaults to [`KeyCapture::None`]; removing the prop restores it.
-    /// Linux implements capture; callbacks run on the engine thread.
+    /// defaults, using mounted rules rather than a listener's answer. The
+    /// keys are canonical [`crate::keymap::Keystroke`]s, matched against
+    /// the event's canonical stroke ([`KeyEvent::keystroke`]); eligible app
+    /// shortcuts and focused native inputs keep priority. Defaults to
+    /// [`KeyCapture::None`]; removing the prop restores it.
     fn capture_keys(mut self, capture: impl IntoReactive<KeyCapture>) -> Self {
         super::host::bind_prop(self.node(), capture, Prop::KeyCapture);
         self

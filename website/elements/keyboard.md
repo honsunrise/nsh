@@ -201,22 +201,62 @@ The height is the part of the keyboard that overlaps the NSH surface. When the w
 > To keep content above the keyboard, `env(keyboard-inset-height)` is the simpler form: it animates with the keyboard
 > natively, without running code.
 
-## Hardware keys on custom Rust views
+## Hardware keys on custom views
 
-On Linux, a focused Rust view can forward hardware input to an app-owned interaction engine: `on_key_down`
-reports the current-layout logical key, physical keycode and repeats, and `on_key_up` reports the matching release.
-This suits a custom-rendered canvas or embedded interaction surface. Named shortcuts use `on_key` / `on_key_with`;
-text editing uses `Input`, and terminal sessions use `Terminal`.
+A focused view hears the hardware key transitions its platform reports: `onKeyDown` / `onKeyUp` in TSX, or
+`on_key_down` / `on_key_up` in Rust. This suits a custom-rendered canvas or embedded interaction surface. Named
+shortcuts use `on_key` / `on_key_with`; text editing uses `Input`, and terminal sessions use `Terminal`.
 
-Both listeners return nothing. `capture_keys(KeyCapture::All)` or `capture_keys(KeyCapture::keys(...))` mounts
-the consumption rule before input arrives; `KeyEvent::captured` reports that decision. The rule accepts reactive
-values; omitting it on a retained view restores `KeyCapture::None`. Eligible app shortcuts keep their priority,
-and focused native inputs keep their keys. A captured Tab stays in the view; an observed Tab follows normal traversal.
+`KeyEvent` reports what the source actually gives:
 
-Key-down notifications reach enabled listening ancestors within the same native window. Releases return to the
-original press target while its window remains active; deactivation clears held keys. `KeyEvent::text` is a keyval
-preview rather than committed text. The Rust API is also exercised by the Linux-desktop headless driver; Rust UI
-sets can expose app-specific components and events to TSX.
+| Field | Meaning |
+|---|---|
+| `key` | The source's logical key: the DOM spelling for named keys (`"Enter"`, `"ArrowLeft"`), else the character the key reports, in its case and layout, never forced onto another layout. `"Unidentified"` when the source names none. |
+| `text` | A preview of the character the key would type with the modifiers held (`"A"`, `"?"`), never committed input-method text; `null` when there is none. |
+| `physical` | The key's identity, when the source reports one: a native numeric code, or the DOM's `code`; `null` otherwise. |
+| `modifiers` | The modifiers held after this transition. |
+| `repeat` | An auto-repeat of a held key. |
+| `captured` | This transition matches the mounted capture rule, so the platform consumes it. |
+
+Both listeners return nothing. One platform event on the focused view bubbles to the enabled listening ancestors
+within the same native window, once each, for `onKeyDown` and `onKeyUp` alike. A real release the source reports
+reaches the focused view even when its press went elsewhere, as the DOM's does; losing the window's focus clears
+held state and invents no releases.
+
+Matching uses a canonical shortcut stroke: a native code or DOM `code` places the key on the US layout, and a
+source that reports only the typed character has its shifted punctuation and capitals placed back on the US key
+with Shift (`?` is `shift+/`) for matching alone; the event's `key` and `text` stay as reported.
+
+`captureKeys` in TSX (`{"none"}`, `{"all"}` or an array such as `{["mod+k", "escape"]}`), or
+`capture_keys(KeyCapture::All)` / `capture_keys(KeyCapture::keys(...))` in Rust, mounts the consumption rule before
+input arrives. The rule is parsed once into canonical shortcut keystrokes (the `nsh/keymap` syntax; `mod` is
+Command on Apple platforms, Control elsewhere), and `KeyEvent.captured` reports this transition's decision. The rule
+accepts reactive values; omitting it on a retained view restores `"none"`. Eligible app shortcuts keep their
+priority, focused native inputs keep their keys, and a capture cannot defeat a shortcut the operating system never
+delivers. A captured Tab stays in the view; an observed Tab follows normal traversal.
+
+```tsx
+import { signal, Text, View } from "nsh";
+
+function Pad() {
+  const log = signal("");
+  return (
+    <View
+      focusable
+      captureKeys={["mod+k", "shift+tab"]}
+      onKeyDown={(e) => log.set(`${e.key} ${e.captured} ${e.repeat}`)}
+      onKeyUp={(e) => log.set(`up ${e.key}`)}
+    >
+      <Text>{log()}</Text>
+    </View>
+  );
+}
+```
+
+The Rust API is also exercised by the Linux-desktop headless driver; Rust UI sets can expose app-specific
+components and events to TSX. Input sources differ: a terminal that reports only strokes (legacy terminals) sends
+no synthetic releases, repeats or physical codes, and GPUI's logical events have no physical code. See
+`docs/dev/tooling.md` and each platform's development page for what its source reports.
 
 ## Platform notes
 

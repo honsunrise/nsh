@@ -1,213 +1,167 @@
-//! Hardware key transitions and mounted capture rules for custom Rust views.
+//! Hardware key transitions and mounted capture rules for custom Rust views
+//! and for TSX views.
 //!
-//! Linux windows and the headless Linux desktop driver deliver [`KeyEvent`]
-//! notifications. App-rendered interaction surfaces can forward physical
-//! keys, current-layout logical keys, repeats and releases to their own
-//! input engine. Named shortcuts remain [`crate::keymap`]'s responsibility.
+//! Windows, desktops and browsers deliver [`KeyEvent`] notifications for the
+//! focused view; app-rendered interaction surfaces can forward the logical
+//! key, the optional physical identity, repeats and releases to their own
+//! input engine. Raw logical key names are input data: the DOM's spelling
+//! for named keys, and the character a printable key reports, never forced
+//! onto a made-up layout. Named shortcuts remain [`crate::keymap`]'s
+//! responsibility.
 //!
-//! [`KeyCapture`] decides native consumption before callbacks run. Focus
-//! stays with the platform's existing Tab and explicit-focus behavior.
+//! [`KeyCapture`] decides native consumption before callbacks run. Its keys
+//! are canonical [`Keystroke`]s, so a capture shares the shortcut vocabulary
+//! and normalization ([`KeyEvent::keystroke`]). Focus stays with the
+//! platform's existing Tab and explicit-focus behavior.
 
 use std::sync::Arc;
 
 use crate::{
     element::SharedString,
-    keymap::{Key as KeystrokeKey, Keystroke, Modifiers},
+    keymap::{Keystroke, Modifiers},
+    platform::Os,
 };
 
-/// A key, independent of the layout's shifted characters.
+/// The physical identity of a key, when the source reports one.
 ///
-/// A printable key is a [`Key::Character`] of the character it types
-/// without Shift (`"a"`, `"1"`, `"/"`, `"é"`); the other keys are
-/// [`Key::Named`]. Shift and the layout change [`KeyEvent::text`], not
-/// the key: Shift+A is `Key::Character("a")` with `text: Some("A")`.
+/// It is layout independent: what the key is, never what it types. A source
+/// that has no real code (GPUI's logical events, a terminal) leaves
+/// [`KeyEvent::physical`] `None` rather than guessing one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum Key {
-    /// A named (non-character) key.
-    Named(NamedKey),
-    /// A key typing a character: the unshifted, layout-aware character,
-    /// lower case for letters.
-    Character(SharedString),
+pub enum PhysicalKey {
+    /// The platform's numeric code, as it reports it: a Windows virtual-key
+    /// code, AppKit's `NSEvent.keyCode`, a UIKit HID usage, a GTK keycode or
+    /// an Android scan code (`KeyEvent.getScanCode`, the Linux key code of
+    /// the key). Code 0 is a key on Apple keyboards; Android reports 0 for
+    /// no scan code, which is `None`.
+    Native(u32),
+    /// The DOM's `KeyboardEvent.code` (`"KeyA"`, `"Digit1"`, `"ArrowLeft"`).
+    Code(SharedString),
 }
 
-impl Default for Key {
-    /// A key the platform has no name for.
-    fn default() -> Self {
-        Key::Named(NamedKey::Unidentified)
-    }
-}
-
-impl Key {
-    /// How the platforms name it in a payload (`"a"`, `"Enter"`, `"F5"`).
-    pub fn name(&self) -> &str {
-        match self {
-            Key::Named(named) => named.name(),
-            Key::Character(c) => c,
-        }
-    }
-}
-
-/// A key that is not a character ([`Key::Named`]).
-///
-/// The set is not exhaustive: platforms report the keys their keyboards
-/// have.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum NamedKey {
-    /// A key the platform has no name for, or does not report.
-    #[default]
-    Unidentified,
-    /// Return / Enter (the keypad's too).
-    Enter,
-    /// Tab.
-    Tab,
-    /// Backspace (the Mac's Delete).
-    Backspace,
-    /// Escape.
-    Escape,
-    /// The space bar (it types a space: `text` is `Some(" ")`).
-    Space,
-    /// Forward delete.
-    Delete,
-    /// Insert.
-    Insert,
-    /// Home.
-    Home,
-    /// End.
-    End,
-    /// Page Up.
-    PageUp,
-    /// Page Down.
-    PageDown,
-    /// The left arrow.
-    ArrowLeft,
-    /// The right arrow.
-    ArrowRight,
-    /// The up arrow.
-    ArrowUp,
-    /// The down arrow.
-    ArrowDown,
-    /// A function key, F1 to F24.
-    F(u8),
-    /// The Shift key itself.
-    Shift,
-    /// The Control key itself.
-    Control,
-    /// The Alt key itself (Option on Apple keyboards).
-    Alt,
-    /// The Command / Super / Windows key itself.
-    Meta,
-}
-
-impl NamedKey {
-    /// Its payload name (`"Enter"`, `"ArrowLeft"`, `"F5"`).
-    fn name(self) -> &'static str {
-        match self {
-            NamedKey::Unidentified => "Unidentified",
-            NamedKey::Enter => "Enter",
-            NamedKey::Tab => "Tab",
-            NamedKey::Backspace => "Backspace",
-            NamedKey::Escape => "Escape",
-            NamedKey::Space => " ",
-            NamedKey::Delete => "Delete",
-            NamedKey::Insert => "Insert",
-            NamedKey::Home => "Home",
-            NamedKey::End => "End",
-            NamedKey::PageUp => "PageUp",
-            NamedKey::PageDown => "PageDown",
-            NamedKey::ArrowLeft => "ArrowLeft",
-            NamedKey::ArrowRight => "ArrowRight",
-            NamedKey::ArrowUp => "ArrowUp",
-            NamedKey::ArrowDown => "ArrowDown",
-            NamedKey::F(1) => "F1",
-            NamedKey::F(2) => "F2",
-            NamedKey::F(3) => "F3",
-            NamedKey::F(4) => "F4",
-            NamedKey::F(5) => "F5",
-            NamedKey::F(6) => "F6",
-            NamedKey::F(7) => "F7",
-            NamedKey::F(8) => "F8",
-            NamedKey::F(9) => "F9",
-            NamedKey::F(10) => "F10",
-            NamedKey::F(11) => "F11",
-            NamedKey::F(12) => "F12",
-            NamedKey::F(13) => "F13",
-            NamedKey::F(14) => "F14",
-            NamedKey::F(15) => "F15",
-            NamedKey::F(16) => "F16",
-            NamedKey::F(17) => "F17",
-            NamedKey::F(18) => "F18",
-            NamedKey::F(19) => "F19",
-            NamedKey::F(20) => "F20",
-            NamedKey::F(21) => "F21",
-            NamedKey::F(22) => "F22",
-            NamedKey::F(23) => "F23",
-            NamedKey::F(24) => "F24",
-            NamedKey::F(_) => "F",
-            NamedKey::Shift => "Shift",
-            NamedKey::Control => "Control",
-            NamedKey::Alt => "Alt",
-            NamedKey::Meta => "Meta",
-        }
-    }
-
-    /// The app shortcut key of this named key, for matching a
-    /// [`Keystroke`]: `None` for the modifier keys themselves, which no
-    /// keystroke names.
-    fn keystroke_key(self) -> Option<KeystrokeKey> {
-        Some(match self {
-            NamedKey::Enter => KeystrokeKey::Enter,
-            NamedKey::Tab => KeystrokeKey::Tab,
-            NamedKey::Backspace => KeystrokeKey::Backspace,
-            NamedKey::Escape => KeystrokeKey::Escape,
-            NamedKey::Space => KeystrokeKey::Char(' '),
-            NamedKey::Delete => KeystrokeKey::Delete,
-            NamedKey::Insert => KeystrokeKey::Insert,
-            NamedKey::Home => KeystrokeKey::Home,
-            NamedKey::End => KeystrokeKey::End,
-            NamedKey::PageUp => KeystrokeKey::PageUp,
-            NamedKey::PageDown => KeystrokeKey::PageDown,
-            NamedKey::ArrowLeft => KeystrokeKey::Left,
-            NamedKey::ArrowRight => KeystrokeKey::Right,
-            NamedKey::ArrowUp => KeystrokeKey::Up,
-            NamedKey::ArrowDown => KeystrokeKey::Down,
-            NamedKey::F(n) => KeystrokeKey::F(n),
-            NamedKey::Unidentified
-            | NamedKey::Shift
-            | NamedKey::Control
-            | NamedKey::Alt
-            | NamedKey::Meta => return None,
-        })
-    }
-}
-
-/// A key that went down or came up on the focused view
-/// (`on_key_down` / `on_key_up`), as GPUI's `KeyDownEvent`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// A key that went down or came up on the focused view (`on_key_down` /
+/// `on_key_up`), as GPUI's `KeyDownEvent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyEvent {
-    /// The key, without Shift or the layout's shifted character
-    /// ([`Key::Character`] is the unshifted one).
-    pub key: Key,
-    /// A preview of the character named by the keyval and modifiers
-    /// (`"A"` for Shift+A, `"?"` for Shift+/), not committed input-method
-    /// text. `None` for non-printing keys, Control/Alt/Command combinations
-    /// and key releases.
+    /// The logical key the source reports: the DOM's spelling for named keys
+    /// (`"Enter"`, `"Escape"`, `"ArrowLeft"`) and the character a printable
+    /// key reports in its actual case, on the layout in use. Not normalized
+    /// to another layout. `"Unidentified"` when the source names none.
+    pub key: SharedString,
+    /// A preview of the character the key produces with the modifiers held
+    /// (`"A"` for Shift+A, `"?"` for Shift+/), from the source's key text.
+    /// Never committed input-method text. `None` for keys that print
+    /// nothing and when the source reports no text.
     pub text: Option<SharedString>,
-    /// The modifiers held after this transition. Releasing one Shift
-    /// keeps `shift` set while the other Shift is still held.
+    /// The key's physical identity, when the source reports one.
+    pub physical: Option<PhysicalKey>,
+    /// The modifiers held after this transition. Releasing one Shift keeps
+    /// `shift` set while the other Shift is still held.
     pub modifiers: Modifiers,
-    /// The platform's hardware keycode: stable for a physical key, and for
-    /// what position it has on the keyboard (never what it types).
-    pub physical: u32,
     /// An auto-repeat of a key held down (the press itself is not one).
     pub repeat: bool,
-    /// The platform consumed this press under a [`KeyCapture`] rule of the
-    /// focused view's ancestry: no text or native default follows from it.
-    /// A listener is still notified, on the focused view and its
-    /// ancestors, whatever this is.
+    /// This transition matches a mounted [`KeyCapture`] rule of the focused
+    /// view or an enabled ancestor: the platform consumes it, no text or
+    /// native default follows. A listener is still notified.
     pub captured: bool,
+}
+
+impl Default for KeyEvent {
+    /// A key the source has not identified.
+    fn default() -> Self {
+        Self {
+            key: SharedString::new_static("Unidentified"),
+            text: None,
+            physical: None,
+            modifiers: Modifiers::default(),
+            repeat: false,
+            captured: false,
+        }
+    }
+}
+
+impl KeyEvent {
+    /// The canonical shortcut stroke of this transition, for
+    /// [`KeyCapture::captures`]: the key's US-layout position from its
+    /// physical code when the source gives one this core knows (Windows
+    /// virtual keys, AppKit key codes, HID usages, Android key codes, DOM
+    /// codes), else the reported key's shortcut name
+    /// ([`crate::keymap::Key::from_name`]).
+    ///
+    /// A GTK keycode and a terminal's codes are not placed here: the
+    /// backend that has the layout (GTK's Latin group, which its shortcuts
+    /// match by) builds the stroke, and otherwise the reported key is used.
+    /// A source that reports only the character it typed (no physical
+    /// code) has its shifted punctuation and capitals placed back on the
+    /// US key with Shift (`?` is `shift+/`, `A` is `shift+a`), as the
+    /// shortcut vocabulary spells them; the event's own `key` and `text`
+    /// stay as the source reported them.
+    ///
+    /// `None` for the modifier keys themselves and for any key that is no
+    /// shortcut: [`KeyCapture::All`] still captures it
+    /// ([`KeyCapture::captures_key`]). `os` names what the numeric code
+    /// means; a browser passes [`Os::Web`] and its DOM codes.
+    pub fn keystroke(&self, os: Os) -> Option<Keystroke> {
+        if let Some(key) = self
+            .physical
+            .as_ref()
+            .and_then(|physical| physical.key(os))
+        {
+            return Some(Keystroke {
+                modifiers: self.modifiers,
+                key,
+            });
+        }
+        // No physical code: the reported key's shortcut name. A single
+        // character is placed back on its US key with Shift (`?` is
+        // `shift+/`, `A` is `shift+a`), as the shortcuts spell it; the
+        // event itself keeps the source's character.
+        let mut modifiers = self.modifiers;
+        let mut chars = self.key.chars();
+        let key = match (chars.next(), chars.next()) {
+            (Some(c), None) if c.is_ascii_graphic() => {
+                match crate::keymap::unshifted(c) {
+                    Some(base) => {
+                        modifiers.shift = true;
+                        crate::keymap::Key::Char(base)
+                    }
+                    None => {
+                        modifiers.shift |= c.is_ascii_uppercase();
+                        crate::keymap::Key::Char(c.to_ascii_lowercase())
+                    }
+                }
+            }
+            _ => crate::keymap::Key::from_name(&self.key)?,
+        };
+        Some(Keystroke { modifiers, key })
+    }
+}
+
+impl PhysicalKey {
+    /// The shortcut key of this code on `os`, by the key's US-layout place.
+    fn key(&self, os: Os) -> Option<crate::keymap::Key> {
+        match self {
+            PhysicalKey::Native(code) => {
+                let code = u16::try_from(*code).ok()?;
+                match os {
+                    Os::Windows => crate::keymap::Key::from_virtual_key(code),
+                    // AppKit's virtual key codes (`NSEvent.keyCode`), not
+                    // UIKit's HID usages.
+                    Os::MacOs => crate::keymap::Key::from_appkit_keycode(code),
+                    Os::Ios => crate::keymap::Key::from_hid_usage(code),
+                    // Android's scan code is the key's Linux key code.
+                    Os::Android => crate::keymap::Key::from_scan_code(code),
+                    // GTK keycodes (and a terminal's, which are none) are
+                    // not a US layout the core can name: the reported key
+                    // is used.
+                    Os::Linux | Os::Web => None,
+                }
+            }
+            PhysicalKey::Code(code) => crate::keymap::Key::from_code(code),
+        }
+    }
 }
 
 /// The keys a view consumes before the platform's native defaults run
@@ -216,8 +170,8 @@ pub struct KeyEvent {
 /// A view mounts one as a reactive prop; the platform reads the mounted
 /// rule of the focused view and its ancestry and decides without waiting
 /// for a listener. An eligible app shortcut keeps its priority, and a
-/// native input or child keeps its own keys. Disabled views, and views
-/// that left the focused view's ancestry, capture nothing.
+/// native input or child keeps its own keys. Disabled views, and views that
+/// left the focused view's ancestry, capture nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum KeyCapture {
@@ -226,21 +180,21 @@ pub enum KeyCapture {
     None,
     /// Every key is captured, named and modifier keys included.
     All,
-    /// The listed keys are captured, each by its unshifted logical key and
-    /// the exact modifiers it names.
+    /// The listed keys are captured: each canonical [`Keystroke`] matches
+    /// the same key and exactly its modifiers.
     Keys(Arc<[Keystroke]>),
 }
 
 impl KeyCapture {
-    /// A rule capturing `keys` (a [`Keystroke`]'s key and modifiers, both
-    /// exact).
+    /// A rule capturing `keys` (each a [`Keystroke`]'s key and modifiers,
+    /// both exact).
     pub fn keys(keys: impl IntoIterator<Item = Keystroke>) -> Self {
         KeyCapture::Keys(keys.into_iter().collect())
     }
 
     /// Whether this rule captures nothing: [`Self::None`], or
     /// [`Self::Keys`] without keys. The platform need not look at a key's
-    /// raw event where it is true.
+    /// event where it is true.
     pub fn is_none(&self) -> bool {
         match self {
             KeyCapture::None => true,
@@ -249,41 +203,31 @@ impl KeyCapture {
         }
     }
 
-    /// Whether this rule captures `event`: [`Self::All`] every key,
-    /// [`Self::Keys`] those whose unshifted logical key and modifiers
-    /// equal the event's, [`Self::None`] none.
+    /// Whether this rule captures the transition whose canonical shortcut
+    /// stroke is `keystroke`: [`Self::All`] everything, [`Self::Keys`] those
+    /// that equal one of its strokes, [`Self::None`] nothing.
     ///
-    /// This only matches the key and its modifiers: the platform applies
-    /// the rule to the enabled nodes on the focused view's ancestry.
-    pub fn captures(&self, event: &KeyEvent) -> bool {
+    /// This only matches the key and its modifiers: the platform applies the
+    /// rule to the enabled nodes on the focused view's ancestry. The event's
+    /// text does not change the match: Shift+A is still the `a` key.
+    pub fn captures(&self, keystroke: &Keystroke) -> bool {
         match self {
             KeyCapture::None => false,
             KeyCapture::All => true,
-            KeyCapture::Keys(keys) => keystroke_key(&event.key).is_some_and(|key| {
-                keys.contains(&Keystroke {
-                    key,
-                    modifiers: event.modifiers,
-                })
-            }),
+            KeyCapture::Keys(keys) => keys.contains(keystroke),
         }
     }
-}
 
-/// The shortcut key of a key event's key, for matching a [`Keystroke`]: a
-/// character key only when it types one character. The event reports the
-/// unshifted layout character; letters take the keymap's canonical lower
-/// case spelling.
-fn keystroke_key(key: &Key) -> Option<KeystrokeKey> {
-    Some(match key {
-        Key::Named(named) => named.keystroke_key()?,
-        Key::Character(text) => {
-            let mut chars = text.chars();
-            match (chars.next(), chars.next()) {
-                (Some(c), None) => KeystrokeKey::Char(c.to_ascii_lowercase()),
-                _ => return None,
-            }
+    /// [`Self::captures`] for a key with no canonical shortcut stroke (a
+    /// non-ASCII character or a key the source cannot name): [`Self::All`]
+    /// captures it, [`Self::Keys`] cannot match it, [`Self::None`] never.
+    pub fn captures_key(&self, keystroke: Option<&Keystroke>) -> bool {
+        match self {
+            KeyCapture::None => false,
+            KeyCapture::All => true,
+            KeyCapture::Keys(keys) => keystroke.is_some_and(|keystroke| keys.contains(keystroke)),
         }
-    })
+    }
 }
 
 #[cfg(test)]
@@ -296,12 +240,22 @@ mod tests {
         Keystroke::parse_with(text, false).expect(text)
     }
 
-    fn event(key: Key, modifiers: Modifiers) -> KeyEvent {
+    fn event(key: &'static str, modifiers: Modifiers) -> KeyEvent {
         KeyEvent {
-            key,
+            key: key.into(),
             modifiers,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_default_event_names_no_key() {
+        let event = KeyEvent::default();
+        assert_eq!(event.key.as_str(), "Unidentified");
+        assert_eq!(event.text, None);
+        assert_eq!(event.physical, None);
+        assert!(!event.captured && !event.repeat);
+        assert_eq!(event.keystroke(Os::Linux), None);
     }
 
     #[test]
@@ -313,8 +267,8 @@ mod tests {
     }
 
     #[test]
-    fn capture_matches_the_unshifted_key_and_modifiers_exactly() {
-        let a = event(Key::Character("a".into()), Modifiers::default());
+    fn capture_matches_the_stroke_and_modifiers_exactly() {
+        let a = stroke("a");
         assert!(!KeyCapture::default().captures(&a));
         assert!(!KeyCapture::None.captures(&a));
         assert!(KeyCapture::All.captures(&a));
@@ -325,41 +279,40 @@ mod tests {
         assert!(!KeyCapture::keys([stroke("b")]).captures(&a));
 
         let shifted = event(
-            Key::Character("a".into()),
+            "A",
             Modifiers {
                 shift: true,
                 ..Default::default()
             },
         );
+        let shifted = shifted.keystroke(Os::Linux).unwrap();
         assert!(KeyCapture::keys([stroke("shift+a")]).captures(&shifted));
         assert!(!KeyCapture::keys([stroke("a")]).captures(&shifted));
-        // Shift+A still types `a`'s key: `text` does not change the match.
-        let text = KeyEvent {
-            key: Key::Character("a".into()),
-            text: Some("A".into()),
-            modifiers: Modifiers {
-                shift: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert!(KeyCapture::keys([stroke("shift+a")]).captures(&text));
+
+        // A shortcut names US-layout ASCII keys: another layout's character
+        // has no keystroke, and only `All` captures it.
+        let e_acute = event("é", Modifiers::default());
+        assert_eq!(e_acute.keystroke(Os::Linux), None);
+        assert!(KeyCapture::All.captures_key(None));
+        assert!(!KeyCapture::keys([stroke("a")]).captures_key(None));
     }
 
     #[test]
     fn capture_matches_named_keys_by_their_shortcut_names() {
         for (key, name) in [
-            (NamedKey::ArrowLeft, "left"),
-            (NamedKey::Enter, "enter"),
-            (NamedKey::Escape, "escape"),
-            (NamedKey::Tab, "tab"),
-            (NamedKey::Backspace, "backspace"),
-            (NamedKey::Delete, "delete"),
-            (NamedKey::PageDown, "pagedown"),
-            (NamedKey::F(5), "f5"),
-            (NamedKey::Space, "space"),
+            ("ArrowLeft", "left"),
+            ("Enter", "enter"),
+            ("Escape", "escape"),
+            ("Tab", "tab"),
+            ("Backspace", "backspace"),
+            ("Delete", "delete"),
+            ("PageDown", "pagedown"),
+            ("F5", "f5"),
+            (" ", "space"),
         ] {
-            let pressed = event(Key::Named(key), Modifiers::default());
+            let pressed = event(key, Modifiers::default())
+                .keystroke(Os::Linux)
+                .unwrap_or_else(|| panic!("{key}"));
             assert!(
                 KeyCapture::keys([stroke(name)]).captures(&pressed),
                 "{name}"
@@ -367,35 +320,115 @@ mod tests {
         }
 
         // An unknown key is no keystroke: only `All` captures it.
-        let unknown = event(Key::default(), Modifiers::default());
-        assert!(KeyCapture::All.captures(&unknown));
-        assert!(!KeyCapture::keys([stroke("a")]).captures(&unknown));
+        let unknown = event("dead_acute", Modifiers::default());
+        assert_eq!(unknown.keystroke(Os::Linux), None);
+        assert!(KeyCapture::All.captures_key(None));
+        assert!(!KeyCapture::keys([stroke("a")]).captures_key(None));
 
         // A modifier key is no keystroke: only `All` captures it.
         let shift = event(
-            Key::Named(NamedKey::Shift),
+            "Shift",
             Modifiers {
                 shift: true,
                 ..Default::default()
             },
         );
-        assert!(KeyCapture::All.captures(&shift));
-        assert!(!KeyCapture::keys([stroke("shift+a")]).captures(&shift));
+        assert_eq!(shift.keystroke(Os::Linux), None);
+        assert!(KeyCapture::All.captures_key(None));
+
+        // A non-ASCII key the source cannot name as a shortcut.
+        let sharp_s = event("ß", Modifiers::default());
+        assert_eq!(sharp_s.keystroke(Os::Linux), None);
+        assert!(!KeyCapture::keys([stroke("a")]).captures_key(None));
     }
 
     #[test]
-    fn capture_matches_the_layouts_unshifted_character() {
-        let e_acute = event(Key::Character("é".into()), Modifiers::default());
-        let keystroke = Keystroke {
-            key: ShortcutKey::Char('é'),
-            modifiers: Modifiers::default(),
+    fn the_physical_code_names_the_us_layout_key() {
+        // A DOM code beats a reported non-US character: shortcuts work on
+        // any layout.
+        let cyrillic = KeyEvent {
+            key: "ф".into(),
+            physical: Some(PhysicalKey::Code("KeyA".into())),
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            ..Default::default()
         };
-        assert!(KeyCapture::keys([keystroke]).captures(&e_acute));
+        assert_eq!(
+            cyrillic.keystroke(Os::Web),
+            Some(Keystroke {
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+                key: ShortcutKey::Char('a'),
+            })
+        );
+        // A Windows virtual key, an AppKit key code (0 is `A`), a HID
+        // usage and an Android key code.
+        let native = |code| KeyEvent {
+            physical: Some(PhysicalKey::Native(code)),
+            ..Default::default()
+        };
+        assert_eq!(
+            native(0x41).keystroke(Os::Windows).map(|k| k.key),
+            Some(ShortcutKey::Char('a'))
+        );
+        assert_eq!(
+            native(0).keystroke(Os::MacOs).map(|k| k.key),
+            Some(ShortcutKey::Char('a'))
+        );
+        assert_eq!(
+            native(4).keystroke(Os::Ios).map(|k| k.key),
+            Some(ShortcutKey::Char('a'))
+        );
+        // Android's scan code of `A` (its key code is 29).
+        assert_eq!(
+            native(30).keystroke(Os::Android).map(|k| k.key),
+            Some(ShortcutKey::Char('a'))
+        );
+        // A code this core cannot place falls back to the reported key.
+        let linux = KeyEvent {
+            key: "a".into(),
+            physical: Some(PhysicalKey::Native(38)),
+            ..Default::default()
+        };
+        assert_eq!(
+            linux.keystroke(Os::Linux).map(|k| k.key),
+            Some(ShortcutKey::Char('a'))
+        );
 
-        // Shift is a modifier: `/` with Shift types `?`, and `?` is not
-        // another spelling of `/`.
+        // DOM named and punctuation codes.
+        for (code, expected) in [
+            ("ArrowLeft", ShortcutKey::Left),
+            ("Enter", ShortcutKey::Enter),
+            ("Digit1", ShortcutKey::Char('1')),
+            ("Slash", ShortcutKey::Char('/')),
+            ("F5", ShortcutKey::F(5)),
+            ("Space", ShortcutKey::Char(' ')),
+        ] {
+            let event = KeyEvent {
+                physical: Some(PhysicalKey::Code(code.into())),
+                ..Default::default()
+            };
+            assert_eq!(event.keystroke(Os::Web).map(|k| k.key), Some(expected), "{code}");
+        }
+        let unknown = KeyEvent {
+            physical: Some(PhysicalKey::Code("IntlBackslash".into())),
+            key: "\\".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            unknown.keystroke(Os::Web).map(|k| k.key),
+            Some(ShortcutKey::Char('\\'))
+        );
+    }
+
+    #[test]
+    fn text_does_not_change_the_match() {
         let slash = KeyEvent {
-            key: Key::Character("/".into()),
+            key: "/".into(),
             text: Some("?".into()),
             modifiers: Modifiers {
                 shift: true,
@@ -403,38 +436,31 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(KeyCapture::keys([stroke("shift+/")]).captures(&slash));
-        let question = event(Key::Character("?".into()), Modifiers::default());
-        assert!(!KeyCapture::keys([stroke("shift+/")]).captures(&question));
-        assert!(!KeyCapture::keys([stroke("/")]).captures(&question));
-        // A keystroke naming `?` itself (built, as parsing rejects shifted
-        // punctuation) matches it exactly.
+        assert!(KeyCapture::keys([stroke("shift+/")]).captures(&slash.keystroke(Os::Linux).unwrap()));
+        // A source that reports only the character it typed (`?`, no
+        // physical code) is placed back on its US key with Shift for
+        // matching; the event keeps the character it reported.
+        let question = event("?", Modifiers::default());
+        assert_eq!(question.key.as_str(), "?");
+        assert!(KeyCapture::keys([stroke("shift+/")]).captures(
+            question.keystroke(Os::Linux).as_ref().unwrap()
+        ));
+        let bang = event("!", Modifiers::default());
+        assert!(KeyCapture::keys([stroke("shift+1")]).captures(
+            bang.keystroke(Os::Linux).as_ref().unwrap()
+        ));
+        // An upper case letter implies Shift, as the shortcuts spell it.
+        let capital = event("A", Modifiers::default());
+        assert!(KeyCapture::keys([stroke("shift+a")]).captures(
+            capital.keystroke(Os::Linux).as_ref().unwrap()
+        ));
+        // A keystroke built with `?` itself is not the US key's shortcut.
         let question_stroke = Keystroke {
             key: ShortcutKey::Char('?'),
             modifiers: Modifiers::default(),
         };
-        assert!(KeyCapture::keys([question_stroke]).captures(&question));
-
-        // Letters take the keymap's canonical lower case spelling.
-        let capital = event(
-            Key::Character("A".into()),
-            Modifiers {
-                shift: true,
-                ..Default::default()
-            },
-        );
-        assert!(KeyCapture::keys([stroke("shift+a")]).captures(&capital));
-
-        // Only a key typing exactly one character can equal a keystroke.
-        let two = event(
-            Key::Character(SharedString::from("ab")),
-            Modifiers::default(),
-        );
-        assert!(!KeyCapture::keys([keystroke]).captures(&two));
-        let none = event(
-            Key::Character(SharedString::default()),
-            Modifiers::default(),
-        );
-        assert!(!KeyCapture::keys([stroke("a")]).captures(&none));
+        assert!(!KeyCapture::keys([question_stroke]).captures(
+            question.keystroke(Os::Linux).as_ref().unwrap()
+        ));
     }
 }
