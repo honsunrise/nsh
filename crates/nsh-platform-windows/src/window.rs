@@ -1045,7 +1045,7 @@ fn handle(
         // message in between changed the focus): give the key back to the
         // system, with the characters `TranslateMessage` would have made.
         let original = if sys { WM_SYSKEYDOWN } else { WM_KEYDOWN };
-        let mut key = MSG {
+        let key = MSG {
             hwnd,
             message: original,
             wParam: wparam,
@@ -1940,6 +1940,12 @@ pub(crate) fn keep<T: 'static>(value: T) {
 mod tests {
     use super::*;
 
+    fn apply(surface: &Rc<Surface>, items: &[nsh_core::MountItem]) {
+        for item in items {
+            surface.mounter.borrow_mut().apply(surface, item);
+        }
+    }
+
     thread_local! {
         /// What the test's windows heard: window, message, `wparam` and
         /// `lparam` (the root's own procedure records too).
@@ -2160,7 +2166,7 @@ mod tests {
         let surface = Surface::new(Default::default());
         surface.root.state_mut().frame = crate::geom::rect(0.0, 0.0, 200.0, 150.0);
         let hwnd = create(&surface, "NSH key capture test", (200, 150), None, false).unwrap();
-        surface.mounter.borrow_mut().apply(
+        apply(
             &surface,
             &[
                 MountItem::Create {
@@ -2180,13 +2186,10 @@ mod tests {
         );
         let view = surface.view(2).expect("the view");
         let set_capture = |capture: KeyCapture| {
-            let mut props: nsh_core::ViewProps = view.state().props.clone();
+            let mut props: nsh_core::ViewProps = (*view.state().props).clone();
             props.focusable = Some(true);
             props.key_capture = capture;
-            surface
-                .mounter
-                .borrow_mut()
-                .apply(&surface, &[MountItem::ViewProps { id: 2, props }]);
+            apply(&surface, &[MountItem::ViewProps { id: 2, props: Box::new(props) }]);
         };
         set_capture(KeyCapture::All);
         assert!(crate::keyboard::focus_control(&surface, &view));
@@ -2242,7 +2245,7 @@ mod tests {
         let surface = Surface::new(Default::default());
         surface.root.state_mut().frame = crate::geom::rect(0.0, 0.0, 200.0, 150.0);
         let hwnd = create(&surface, "NSH key order test", (200, 150), None, false).unwrap();
-        surface.mounter.borrow_mut().apply(
+        apply(
             &surface,
             &[
                 MountItem::Create {
@@ -2261,13 +2264,10 @@ mod tests {
             ],
         );
         let view = surface.view(2).expect("the view");
-        let mut props: nsh_core::ViewProps = view.state().props.clone();
+        let mut props: nsh_core::ViewProps = (*view.state().props).clone();
         props.focusable = Some(true);
         props.key_capture = KeyCapture::All;
-        surface
-            .mounter
-            .borrow_mut()
-            .apply(&surface, &[MountItem::ViewProps { id: 2, props }]);
+        apply(&surface, &[MountItem::ViewProps { id: 2, props: Box::new(props) }]);
         assert!(crate::keyboard::focus_control(&surface, &view));
         drain_messages(hwnd);
         // The key, then a character and a wake (an engine/focus update)
@@ -2319,7 +2319,7 @@ mod tests {
             false,
         )
         .unwrap();
-        surface.mounter.borrow_mut().apply(
+        apply(
             &surface,
             &[
                 MountItem::Create {
@@ -2339,13 +2339,10 @@ mod tests {
         );
         let view = surface.view(2).expect("the view");
         let set_capture = |capture: KeyCapture| {
-            let mut props: nsh_core::ViewProps = view.state().props.clone();
+            let mut props: nsh_core::ViewProps = (*view.state().props).clone();
             props.focusable = Some(true);
             props.key_capture = capture;
-            surface
-                .mounter
-                .borrow_mut()
-                .apply(&surface, &[MountItem::ViewProps { id: 2, props }]);
+            apply(&surface, &[MountItem::ViewProps { id: 2, props: Box::new(props) }]);
         };
         set_capture(KeyCapture::All);
         assert!(crate::keyboard::focus_control(&surface, &view));
@@ -2356,7 +2353,7 @@ mod tests {
             When::Always,
             false,
         );
-        surface.mounter.borrow_mut().apply(
+        apply(
             &surface,
             &[MountItem::Keymap(std::sync::Arc::new(Keymap::new(vec![
                 binding,
