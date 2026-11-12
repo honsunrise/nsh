@@ -168,24 +168,38 @@ report nothing: the key being handled is kept until the main loop is idle, and `
 ### Custom Rust views
 
 `keyboard.rs` adds hardware key notifications to the existing focus path in `key_focus.rs`.
-An app-rendered view can forward physical keycodes, current-layout logical keys, repeats and releases to its
-own interaction engine through `Interactive::on_key_down` and `on_key_up`. These are asynchronous observations;
-`capture_keys` mounts a reactive `KeyCapture` rule so GTK can consume a key without waiting for the engine.
-Omitting the rule on a retained view restores `KeyCapture::None`.
+An app-rendered view can observe the source's logical key, its hardware identity, repeats and releases through
+`Interactive::on_key_down` and `on_key_up`. These are asynchronous observations; `capture_keys` mounts a reactive
+`KeyCapture` rule so GTK can consume a key without waiting for the engine. Omitting the rule on a retained view
+restores `KeyCapture::None`.
+
+The logical key is GDK's actual keyval, so Shift's case (`"K"`) and a non-US layout's character are reported as the
+source gives them, and common named keys use the DOM's spelling (`"Enter"`, `"ArrowLeft"`). `KeyEvent::physical`
+keeps GDK's hardware keycode as `PhysicalKey::Native(code)` (or `None` when the event has none); `KeyEvent::text`
+is the keyval's character preview for a printing key, never an IME commit. NumLock and other private layout
+selectors survive the GTK boundary; only Shift and CapsLock are removed to find the key a capture names.
+
+Capture rules are matched against the canonical shortcut `Keystroke` that `nsh/keymap` already parses (`"ctrl+k"`,
+`"shift+1"`), from the key the event's keycode types without Shift, on its layout group or another group's Latin
+key as the shortcut controller matches one. The raw logical key string is never parsed as a shortcut syntax in the
+adapter. `All` takes a key whose layout names no shortcut key; no rule at all is the fast path.
 
 Eligible app shortcuts run first, including their window, repeat and pass-through rules. The raw key path follows,
-then existing native defaults. A captured Tab never arms traversal. Key-down notifications reach listening,
-enabled ancestors within the native window; releases return to the original press target and capture decision.
-Window deactivation clears held-key tracking. NSH's native menu popovers observe releases while holding GTK's
-keyboard grab, routing them to the original press target without reporting popup presses as view input. NumLock
-and other layout selectors survive the GTK boundary; only Shift and CapsLock are removed to name the logical key.
-Ordinary views with no raw listener or capture keep the existing fast path. `KeyEvent::text` is a keyval preview;
-native inputs and `Terminal` keep their own text-input behavior.
+then existing native defaults. A captured Tab never arms traversal. Notifications are focus-scoped and use the
+mounted rule when each phase arrives: `KeyDown` and `KeyUp` reach listening, enabled ancestors within the native
+window, and a release goes to the view focused when the source reports it, even if another view (or a popup) heard
+the press. No original down target is retained, a focus move is no release, and a window deactivation clears held
+state without emitting a synthetic key up. Native menu popovers observe releases while holding GTK's keyboard grab,
+reporting them to the focused view without reporting popup presses as view input. Native inputs, web views, native
+components and videos own their keys: a capture around them does not intercept their editing. Ordinary views with
+no raw listener or capture keep the existing fast path.
 
-The API belongs to Rust UI sets, with Linux and Linux-desktop headless providers. A TSX app can use an app-specific
-Rust component that forwards the events it needs. The shared cross-platform `onWheel` API and its `deltaMode`
-payload stay in `ops.rs`; the headless wheel path uses `input::wheel_listener` and `input::scroll_target`, so an
-observer on or outside a scroll view hears the wheel while that scroll view still scrolls.
+The API belongs to Rust UI sets, with Linux and Linux-desktop headless providers. The headless simulator reports the
+logical key and text its generated stroke names (no fabricated hardware code or repeat) on the simulated backends
+whose raw path delivers input, and a focused native input owns its keys. The shared cross-platform `onWheel` API
+and its `deltaMode` payload stay in `ops.rs`; the headless wheel path uses `input::wheel_listener` and
+`input::scroll_target`, so an observer on or outside a scroll view hears the wheel while that scroll view still
+scrolls.
 
 ## Checking a change: `nsh test --target linux`
 

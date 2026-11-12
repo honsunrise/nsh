@@ -14,8 +14,8 @@ use std::{
 
 use nsh_core::{
     AccessibilityRole, AccessibilityState, Bounds, Command, Dialog, EventKind, EventMask,
-    GestureValues, InputConfig, KeyCapture, KeyEvent, MountBatch, MountItem, NodeId, PanActivation,
-    Point, PointerEvents, Points, Size, ViewKind, element::PropEnum,
+    GestureValues, InputConfig, KeyCapture, MountBatch, MountItem, NodeId, PanActivation,
+    Point, PointerEvents, Points, Size, ViewKind, element::PropEnum, keymap::Keystroke,
 };
 
 use crate::selector::{Matcher, Selector, TextMatch};
@@ -2411,21 +2411,23 @@ impl Screen {
             .is_some_and(|v| v.events.contains(event))
     }
 
-    /// Whether `id` or an enabled view around it captures the press
-    /// `event` (`capture_keys`), as the platform's capture policy reads it
-    /// off the mounted props: the press is the platform's then, so it types
-    /// nothing and runs no default. The walk stops at the root of the
-    /// window `id` is in, as a window of the app's own is a window of its
-    /// own on a platform: the views around that root capture nothing. A
-    /// view that was unmounted, or is disabled, captures nothing.
-    pub(crate) fn captures_key(&self, id: NodeId, event: &KeyEvent) -> bool {
+    /// Whether `id` or an enabled view around it captures `stroke`
+    /// (`capture_keys`), as the platform's capture policy reads it off the
+    /// mounted props: the key is the platform's then, so it types nothing
+    /// and runs no default. The walk stops at the root of the window `id`
+    /// is in, as a window of the app's own is a window of its own on a
+    /// platform: the views around that root capture nothing. A view that
+    /// was unmounted, or is disabled, captures nothing.
+    pub(crate) fn captures_key(&self, id: NodeId, stroke: &Keystroke) -> bool {
         let window = self.window_of(id);
         let mut current = Some(id);
         while let Some(id) = current {
             let Some(view) = self.nodes.get(&id) else {
                 return false;
             };
-            if !self.disabled_from(id, Some(window)) && view.key_capture.captures(event) {
+            if !self.disabled_from(id, Some(window))
+                && view.key_capture.captures_key(Some(stroke))
+            {
                 return true;
             }
             if id == window {

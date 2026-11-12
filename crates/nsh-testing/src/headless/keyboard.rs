@@ -5,12 +5,13 @@
 //! keymaps do: the newest binding of the keystroke that fires where the
 //! focus is reports `onKeyCommand`; Return and Space on a focused control
 //! fire only the focus' own bindings (`KeyOptions::for_focus`), else they
-//! press the control. Then, on Linux, a view that has the keyboard focus
-//! hears the press (its `on_key_down` and its ancestors'), the capture rule
-//! of it or of an enabled view around it deciding whether the platform
-//! keeps it (`capture_keys`): a captured press types nothing and runs no
-//! default, and the view hears its `KeyUp` once the platform has chosen
-//! what the key does. A press the platform keeps goes on to its defaults:
+//! press the control. Then, on Linux (the simulated backend whose raw path
+//! delivers input), a view that has the keyboard focus hears the press
+//! (its `on_key_down` and its ancestors'), the capture rule of it or of an
+//! enabled view around it deciding whether the platform keeps it
+//! (`capture_keys`): a captured press types nothing and runs no default,
+//! and the view focused when the source reports the release hears its
+//! `KeyUp`. A press the platform keeps goes on to its defaults:
 //! Return and Space press the focused control, then on a desktop the
 //! application menu's item with that shortcut is chosen (`onMenu`); else
 //! Tab moves the keyboard focus between the inputs and the views that are
@@ -20,9 +21,10 @@
 //! edit it, and Escape goes back.
 
 use nsh_core::{
-    Command, EventKind, EventPayload, Key, KeyEvent, MountBatch, MountItem, NamedKey, NodeId,
-    PayloadValue, ROOT_ID,
+    Command, EventKind, EventPayload, KeyEvent, MountBatch, MountItem, NodeId, PayloadValue,
+    ROOT_ID,
     desktop::{MenuItem, Shortcut},
+    element::SharedString,
     geometry::Points,
     keymap::{self, KeyMatch, Keystroke},
     platform::Os,
@@ -73,10 +75,11 @@ impl Headless {
     /// the press, and so do its ancestors (`on_key_down`); a capture rule of
     /// it or of an enabled view around it (`capture_keys`), read off the
     /// mounted props, says whether the platform keeps the press: a captured
-    /// press types nothing and runs no default. The view hears the `KeyUp`
-    /// for its down after the platform has chosen what the key does (the
-    /// defaults below, or none when captured), as a platform sends it. What
-    /// the platform keeps goes on to its defaults: Return and Space press
+    /// press types nothing and runs no default. The view focused when the
+    /// source reports the release hears the `KeyUp` after the platform has
+    /// chosen what the key does (the defaults below, or none when
+    /// captured), with its capture rule read afresh. What the platform
+    /// keeps goes on to its defaults: Return and Space press
     /// the focused control, then the application menu's shortcuts, a
     /// window's Escape, the context-menu keys and Tab; elsewhere the focused
     /// input takes a character, Backspace or the return key, and Escape goes
@@ -122,12 +125,14 @@ impl Headless {
         if found.consumed() {
             return self.done();
         }
-        // The view the press went down on, with the decision its down
-        // carried: the release goes to it once the platform has chosen what
-        // the key does, as a platform sends it (a press that reads the key
-        // as held must see it down).
-        let mut release = None;
-        if !editing
+        // The raw notification is the focused view's, unless a native
+        // input or native content has (or is) the focus: those own their
+        // keys and text, and a rule around them does not intercept them.
+        // Its `KeyDown` and `KeyUp` are both reported to whatever view is
+        // focused when the source reports them; the simulator moves the
+        // focus between them as a Tab or a dialog can.
+        let mut raw = false;
+        let captured = if !editing
             && self.delivers_raw_input()
             && let Some(view) = self.screen.key_focus()
             && self.screen.accepts_key_focus(view)
@@ -136,7 +141,7 @@ impl Headless {
                 return self.done();
             }
             let mut event = view_key_event(&stroke, true);
-            let captured = self.screen.captures_key(view, &event);
+            let captured = self.screen.captures_key(view, &stroke);
             event.captured = captured;
             // The platform sends the key whatever the view reports itself:
             // the core bubbles it to its ancestors, so a listener above a
@@ -147,12 +152,15 @@ impl Headless {
                 EventKind::KeyDown,
                 EventPayload::Key(event),
             );
-            release = Some((view, captured));
-        }
+            raw = true;
+            captured
+        } else {
+            false
+        };
         let m = stroke.modifiers;
         // What the platform does with an uncaptured key, in the order the
         // platforms run it; the release follows below.
-        if release.is_none_or(|(_, captured)| !captured) {
+        if !captured {
             'defaults: {
                 // Then they press that control, before the menus' shortcuts:
                 // a binding of Return elsewhere does not act instead of it.
@@ -243,10 +251,18 @@ impl Headless {
                 }
             }
         }
-        // The release follows what the key did, as a platform sends it.
-        if let Some((view, captured)) = release {
+        // The release follows what the key did, as a platform sends it, to
+        // the view focused now (a default may have moved it) with the
+        // capture rule mounted now. A native input or native content owns
+        // the release it receives.
+        if raw
+            && self.screen.focused().is_none()
+            && let Some(view) = self.screen.key_focus()
+            && self.screen.accepts_key_focus(view)
+            && !self.screen.hosts_native(view)
+        {
             let mut up = view_key_event(&stroke, false);
-            up.captured = captured;
+            up.captured = self.screen.captures_key(view, &stroke);
             self.engine
                 .control()
                 .dispatch_event(view, EventKind::KeyUp, EventPayload::Key(up));
@@ -540,56 +556,80 @@ impl Headless {
     }
 }
 
-/// The key event of `stroke`, up or down, as a platform reports it on a
-/// focused view.
+/// The key event of `stroke`, up or down, as a simulated platform reports
+/// it on a focused view. The logical key is what the stroke types with
+/// Shift applied and the DOM's name for the named keys; `text` is the
+/// preview of a printing key.
+///
+/// The simulation is generic: it reports what its generated keystroke
+/// says, only on the platforms whose simulated raw path delivers keys
+/// (`delivers_raw_input`). It has no hardware scan and invents none, so
+/// `physical` is `None`; nor does it fabricate repeats, which its strokes
+/// do not model.
 fn view_key_event(stroke: &Keystroke, down: bool) -> KeyEvent {
     let m = stroke.modifiers;
-    let key = match stroke.key {
-        keymap::Key::Char(' ') => Key::Named(NamedKey::Space),
-        keymap::Key::Char(c) => {
-            Key::Character(nsh_core::element::SharedString::from(c.to_string()))
-        }
-        keymap::Key::Enter => Key::Named(NamedKey::Enter),
-        keymap::Key::Escape => Key::Named(NamedKey::Escape),
-        keymap::Key::Tab => Key::Named(NamedKey::Tab),
-        keymap::Key::Backspace => Key::Named(NamedKey::Backspace),
-        keymap::Key::Delete => Key::Named(NamedKey::Delete),
-        keymap::Key::Insert => Key::Named(NamedKey::Insert),
-        keymap::Key::Up => Key::Named(NamedKey::ArrowUp),
-        keymap::Key::Down => Key::Named(NamedKey::ArrowDown),
-        keymap::Key::Left => Key::Named(NamedKey::ArrowLeft),
-        keymap::Key::Right => Key::Named(NamedKey::ArrowRight),
-        keymap::Key::Home => Key::Named(NamedKey::Home),
-        keymap::Key::End => Key::Named(NamedKey::End),
-        keymap::Key::PageUp => Key::Named(NamedKey::PageUp),
-        keymap::Key::PageDown => Key::Named(NamedKey::PageDown),
-        keymap::Key::F(n) => Key::Named(NamedKey::F(n)),
+    let named = match stroke.key {
+        keymap::Key::Char(_) => None,
+        keymap::Key::Enter => Some("Enter"),
+        keymap::Key::Escape => Some("Escape"),
+        keymap::Key::Tab => Some("Tab"),
+        keymap::Key::Backspace => Some("Backspace"),
+        keymap::Key::Delete => Some("Delete"),
+        keymap::Key::Insert => Some("Insert"),
+        keymap::Key::Up => Some("ArrowUp"),
+        keymap::Key::Down => Some("ArrowDown"),
+        keymap::Key::Left => Some("ArrowLeft"),
+        keymap::Key::Right => Some("ArrowRight"),
+        keymap::Key::Home => Some("Home"),
+        keymap::Key::End => Some("End"),
+        keymap::Key::PageUp => Some("PageUp"),
+        keymap::Key::PageDown => Some("PageDown"),
+        keymap::Key::F(n) => Some(match n {
+            1 => "F1",
+            2 => "F2",
+            3 => "F3",
+            4 => "F4",
+            5 => "F5",
+            6 => "F6",
+            7 => "F7",
+            8 => "F8",
+            9 => "F9",
+            10 => "F10",
+            11 => "F11",
+            12 => "F12",
+            13 => "F13",
+            14 => "F14",
+            15 => "F15",
+            16 => "F16",
+            17 => "F17",
+            18 => "F18",
+            19 => "F19",
+            20 => "F20",
+            21 => "F21",
+            22 => "F22",
+            23 => "F23",
+            _ => "F24",
+        }),
     };
+    let typed = match stroke.key {
+        keymap::Key::Char(c) => Some(if m.shift { shifted(c) } else { c }),
+        _ => None,
+    };
+    let key = match (named, typed) {
+        (Some(name), _) => SharedString::from(name),
+        (None, Some(c)) => SharedString::from(c.to_string()),
+        (None, None) => SharedString::from("Unidentified"),
+    };
+    // A key types its text when nothing makes it a shortcut; named keys
+    // type none (Space is a character).
+    let text = typed
+        .filter(|_| !(m.ctrl || m.alt || m.cmd))
+        .map(|c| SharedString::from(c.to_string()));
     let mut event = KeyEvent::default();
     event.key = key;
-    event.text = if down {
-        typed_text(stroke).map(nsh_core::element::SharedString::from)
-    } else {
-        None
-    };
+    event.text = down.then_some(text).flatten();
     event.modifiers = m;
-    event.physical = u32::from(stroke.key.hid_usage().unwrap_or(0));
-    event.repeat = false;
     event
-}
-
-/// The text `stroke` types on the US layout (Shift applied), when it types
-/// any.
-fn typed_text(stroke: &Keystroke) -> Option<String> {
-    let m = stroke.modifiers;
-    if m.ctrl || m.alt || m.cmd {
-        return None;
-    }
-    match stroke.key {
-        keymap::Key::Char(' ') => Some(" ".to_owned()),
-        keymap::Key::Char(c) => Some(if m.shift { shifted(c) } else { c }.to_string()),
-        _ => None,
-    }
 }
 
 /// The character the key typing `c` types with Shift on the US layout.
