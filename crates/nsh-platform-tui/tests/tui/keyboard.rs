@@ -1465,3 +1465,141 @@ fn a_text_field_keeps_its_keys_even_under_a_capture_of_every_key() {
         "the capture did not intercept the field's key"
     );
 }
+
+/// A portal (an `Overlay`) mounted in the root view but declared inside a
+/// view of the page, which alone listens to keys and captures them; the
+/// portal's child is the only focus stop.
+#[component]
+fn PortaledKeys() -> impl IntoElement {
+    let heard = signal(String::from("none"));
+    let focused = signal(String::from("none"));
+    let pressed = signal(0_u32);
+    view()
+        .flex_1()
+        .child(
+            view()
+                .flex_1()
+                .capture_keys(KeyCapture::All)
+                .on_key_down(move |event: &KeyEvent| {
+                    heard.set(format!("{} {}", event.key.as_str(), event.captured))
+                })
+                .child(
+                    overlay()
+                        .absolute()
+                        .left(px(0.0))
+                        .top(px(0.0))
+                        .w(px(40.0))
+                        .h(px(16.0))
+                        .child(
+                            view()
+                                .focusable(true)
+                                .on_press(move |_: &()| pressed.update(|n| *n += 1))
+                                .on_focus(move |_: &()| focused.set("portaled"))
+                                .child(text("portaled child")),
+                        ),
+                ),
+        )
+        .child(
+            text(move || {
+                format!(
+                    "focused {} heard {} pressed {}",
+                    focused.get(),
+                    heard.get(),
+                    pressed.get()
+                )
+            })
+            .absolute()
+            .top(px(32.0)),
+        )
+}
+
+#[test]
+fn a_portaled_child_is_notified_and_captured_by_its_logical_ancestor() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+    view.load(App::Rust(Root::new::<PortaledKeys>(|| ())))
+        .unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "focused none");
+    view.handle(ctrl("n"));
+    draw_until(&mut view, &mut terminal, &rx, "focused portaled");
+    // The portal is mounted at the root, but its logical ancestor is the
+    // view that declared it: interest and capture follow that, and the
+    // rule keeps Enter from pressing the child.
+    assert_eq!(view.handle(key("Enter", Default::default())), Handled::Yes);
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "focused portaled heard Enter true pressed 0",
+    );
+}
+
+/// Two portals at the root: one declared inside a view that captures every
+/// key, its sibling declared by the page itself with the only focus stop.
+#[component]
+fn SiblingPortals() -> impl IntoElement {
+    let heard = signal(String::from("none"));
+    let focused = signal(String::from("none"));
+    view()
+        .flex_1()
+        .child(
+            view()
+                .flex_1()
+                .capture_keys(KeyCapture::All)
+                .on_key_down(move |event: &KeyEvent| {
+                    heard.set(format!("{} {}", event.key.as_str(), event.captured))
+                })
+                .child(
+                    overlay()
+                        .absolute()
+                        .left(px(0.0))
+                        .top(px(0.0))
+                        .w(px(40.0))
+                        .h(px(16.0))
+                        .child(text("listening portal")),
+                ),
+        )
+        .child(
+            overlay()
+                .absolute()
+                .left(px(0.0))
+                .top(px(16.0))
+                .w(px(40.0))
+                .h(px(16.0))
+                .child(
+                    view()
+                        .focusable(true)
+                        .on_press(|_: &()| {})
+                        .on_focus(move |_: &()| focused.set("sibling"))
+                        .child(text("sibling child")),
+                ),
+        )
+        .child(
+            text(move || format!("focused {} heard {}", focused.get(), heard.get()))
+                .absolute()
+                .top(px(48.0)),
+        )
+}
+
+#[test]
+fn another_portals_capture_does_not_take_a_sibling_portals_keys() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+    view.load(App::Rust(Root::new::<SiblingPortals>(|| ())))
+        .unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "focused none");
+    view.handle(ctrl("n"));
+    draw_until(&mut view, &mut terminal, &rx, "focused sibling");
+    // The focus is in the page's own portal: the other portal's capture
+    // rule is not an ancestor of it.
+    assert_eq!(
+        view.handle(key("a", Default::default())),
+        Handled::Ignored
+    );
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "focused sibling heard none",
+    );
+}
