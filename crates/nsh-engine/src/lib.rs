@@ -3417,7 +3417,7 @@ impl<M: TextEngine> State<M> {
                 match event {
                     JsEvent::Event(id, event, payload) => {
                         if matches!(event, EventKind::KeyDown | EventKind::KeyUp) {
-                            dispatch_key(script, self, id, event, &payload);
+                            dispatch_key(script, &mut self.core, &mut self.key_path, id, event, &payload);
                         } else if !self.core.component_event(id, event, &payload)
                             && let Some(script) = script
                         {
@@ -3706,25 +3706,24 @@ fn apply_environment<M: TextEngine>(
 /// listener's answer cannot change handling.
 fn dispatch_key<M: TextEngine>(
     script: Option<&Script>,
-    state: &mut State<M>,
+    core: &mut nsh_core::Core<M>,
+    path: &mut Vec<NodeId>,
     id: NodeId,
     event: EventKind,
     payload: &EventPayload,
 ) {
-    let mut path = std::mem::take(&mut state.key_path);
-    state.core.key_path(id, &mut path);
+    core.key_path(id, path);
     for node in path.iter().copied() {
-        state.core.component_event(node, event, payload);
+        core.component_event(node, event, payload);
         // A node with no listener (Rust or JS) hears nothing: no event
         // object is built for it.
-        if state.core.listens(node, event)
+        if core.listens(node, event)
             && let Some(script) = script
         {
             script.dispatch_event(node, event, payload);
         }
     }
     path.clear();
-    state.key_path = path;
 }
 
 /// Returns false on shutdown.
@@ -3786,7 +3785,7 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             // ancestors within its window, for Rust and JS listeners
             // alike, from this one platform event.
             if matches!(event, EventKind::KeyDown | EventKind::KeyUp) {
-                dispatch_key(script, state, id, event, &payload);
+                dispatch_key(script, &mut state.core, &mut state.key_path, id, event, &payload);
                 return true;
             }
             // Events on a Rust component's parts are the component's.
