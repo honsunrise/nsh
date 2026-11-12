@@ -186,6 +186,18 @@ function MessageBar() {
 > [!NOTE]
 > 要让内容保持在键盘之上，`env(keyboard-inset-height)` 是更简单的方式：它在原生侧随键盘动画，不需要运行代码。
 
+## 自定义 Rust 视图的硬件按键
+
+Linux 上获得焦点的 Rust 视图可以把硬件输入交给应用自己的交互引擎：`on_key_down` 报告当前布局的逻辑键、物理键码和重复按键，`on_key_up` 报告对应的释放。
+这适用于自行绘制的画布或嵌入式交互界面。命名快捷键使用 `on_key` / `on_key_with`，文本编辑使用 `Input`，终端会话使用 `Terminal`。
+
+两个监听函数都不返回值。`capture_keys(KeyCapture::All)` 或 `capture_keys(KeyCapture::keys(...))` 在输入到达前挂载捕获规则；`KeyEvent::captured` 报告已作出的决定。
+规则支持响应式值；保留视图再次渲染时省略规则，会恢复 `KeyCapture::None`。可用的应用快捷键保持优先级，获得焦点的原生输入框保留自己的按键。
+被捕获的 Tab 留在当前视图；仅被观察的 Tab 按正常规则切换焦点。
+
+按下通知沿同一原生窗口内已启用且注册监听的祖先传播。窗口保持活动期间，释放通知回到最初按下的目标；窗口失活会清除按住状态。
+`KeyEvent::text` 是键值对应的字符预览。Linux 桌面模式的无界面驱动也支持这一 Rust API；Rust UI 集可以向 TSX 暴露应用专用组件及事件。
+
 ## 平台说明
 
 - **iOS**：让位以键盘自身的时长和 ease-in-ease-out 曲线动画。

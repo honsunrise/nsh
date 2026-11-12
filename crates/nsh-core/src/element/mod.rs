@@ -220,6 +220,7 @@ pub use crate::{
     ScreenAnimation, ScrollAlignment, SnapAlignment, StatusBarConfig, StatusBarSetting,
     StatusBarStyle, SubmitBehavior, TextShadow, TouchEvent, TransformKind, TransformOrigin,
     Viewability, WheelDelta, WheelEvent,
+    Key, KeyCapture, KeyEvent, NamedKey,
     animation::{
         Curve, EaseMode, Easing, Extrapolate, Keyframe, KeyframeTiming, MotionChannel, MotionKind,
         MotionPreset, MotionSpec, Output as AnimationOutput, PlaybackDirection, StaggerFrom,

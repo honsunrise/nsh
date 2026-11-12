@@ -133,6 +133,19 @@ pub(super) fn payload(host: &Bindings, payload: &EventPayload) -> Result<Value, 
             ("phase", Value::string(p.phase.name())?),
             ("modifiers", modifiers(&p.modifiers)?),
         ])?,
+        EventPayload::Key(event) => {
+            let out = object([
+                ("key", Value::string(event.key.name())?),
+                ("modifiers", modifiers(&event.modifiers)?),
+                ("physical", number(event.physical)),
+                ("repeat", boolean(event.repeat)),
+                ("captured", boolean(event.captured)),
+            ])?;
+            if let Some(text) = &event.text {
+                out.set("text", &Value::string(text.as_str())?)?;
+            }
+            out
+        }
         EventPayload::Wheel(w) => {
             let (dx, dy) = w.delta.xy();
             object([

@@ -263,6 +263,8 @@ events! {
 
     WebEvaluation = "onWebEvaluation" as "": "A native WebView evaluation reply (internal; payload: id and a JSON envelope string data).",
     MouseUp = "onMouseUp": "A mouse button was released over the view or a view inside it (payload: [`EventPayload::Mouse`], its `button` naming the released one, with where and the modifiers). The primary button's release also reports `onPressUp`.",
+    KeyDown = "onKeyDown" as "": "A hardware key went down on a focused Rust view (payload: [`EventPayload::Key`]); asynchronous notifications reach its listening ancestors within the window.",
+    KeyUp = "onKeyUp" as "": "A hardware key was released after going down on a focused Rust view (payload: [`EventPayload::Key`]).",
 }
 
 /// What an input holds, for the system's autofill and suggestions
@@ -1028,6 +1030,8 @@ pub enum EventPayload {
     Wheel(WheelEvent),
     /// A touchpad pinch over a view (`onPinch`).
     Pinch(PinchEvent),
+    /// A hardware key transition on a focused Rust view.
+    Key(crate::KeyEvent),
     /// Where the pointer was at a press (`onPress`, `onLongPress`,
     /// `onPressDown`, `onPressUp`), with the modifier keys and the click
     /// count, on backends that know it.
@@ -3160,6 +3164,9 @@ pub enum Prop {
     /// popover). Unset, the views that take presses are stops.
     #[prop(js = "focusable")]
     Focusable(Option<bool>),
+    /// Hardware keys captured by a Rust view or a focused descendant.
+    #[prop(reset = Prop::KeyCapture(crate::KeyCapture::None))]
+    KeyCapture(crate::KeyCapture),
     /// `selectable` of a view: the texts in it share one selection, as a
     /// browser page's do ([`crate::selection`]); texts with
     /// `selectable={false}` stay out of it, a selectable view inside

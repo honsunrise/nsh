@@ -91,6 +91,8 @@ final class Native {
     static final int PINCH = 79;
     static final int WEB_EVALUATION = 80;
     static final int MOUSE_UP = 81;
+    static final int KEY_DOWN = 82;
+    static final int KEY_UP = 83;
 
     /**
      * Draws the SVG {@code bytes} for a view {@code maxPx} pixels on its longer side, with its shorter side that long

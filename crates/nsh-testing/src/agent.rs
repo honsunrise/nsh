@@ -2319,7 +2319,7 @@ mod tests {
     };
     use nsh_engine::{EngineConfig, EngineControl};
 
-    use super::*;
+    use super::{Key, *};
 
     /// A count and a button that adds one.
     #[component]

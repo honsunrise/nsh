@@ -152,9 +152,9 @@ bubble back up. What NSH adds:
   than a letter is named by the keyval Shift types on the display's layout, `shift+/` as `<Shift>question`, since
   GTK compares the event's keyval); its action fires only where the binding may (the
   focus in another surface: never; in a text widget or hosted widget: only bindings `in_text`), reports the root's
-  `KeyCommand` and stops the key, else lets GTK go on. The application menu's shortcuts (`chrome.rs`) run first but
-  give way to a binding that fires (`keymap::claims`), so a binding wins over a menu item of the same keystroke, as on
-  macOS and Windows. Ctrl+Q, Alt+F4 and F11 cannot be bound; built with `dev`,
+  `KeyCommand` and stops the key, else lets GTK go on. The window key path dispatches application-menu shortcuts
+  (`chrome.rs`) after app bindings and a custom view's capture decision, before native defaults. Exact layout
+  matches precede Latin-group fallbacks. Ctrl+Q, Alt+F4 and F11 cannot be bound; built with `dev`,
   Ctrl+R gets no shortcut (the dev host reloads). GDK does not mark auto-repeats: a binding without `repeat` fires
   once until the window's capture-phase key controller sees a release.
 - **Focus**: Tab / Shift+Tab is GTK's, in screen order (GTK sorts a container's children by position); hidden screens
@@ -164,6 +164,28 @@ bubble back up. What NSH adds:
 `onKeyPress` reports what UIKit's does: the typed text (`"Enter"` for a line break), `"Backspace"` for a deletion (in
 an empty input too), and `"Escape"`, as on macOS. Pasted and undone text, and the deletion of a selection typed over,
 report nothing: the key being handled is kept until the main loop is idle, and `paste-clipboard` marks the paste.
+
+### Custom Rust views
+
+`keyboard.rs` adds hardware key notifications to the existing focus path in `key_focus.rs`.
+An app-rendered view can forward physical keycodes, current-layout logical keys, repeats and releases to its
+own interaction engine through `Interactive::on_key_down` and `on_key_up`. These are asynchronous observations;
+`capture_keys` mounts a reactive `KeyCapture` rule so GTK can consume a key without waiting for the engine.
+Omitting the rule on a retained view restores `KeyCapture::None`.
+
+Eligible app shortcuts run first, including their window, repeat and pass-through rules. The raw key path follows,
+then existing native defaults. A captured Tab never arms traversal. Key-down notifications reach listening,
+enabled ancestors within the native window; releases return to the original press target and capture decision.
+Window deactivation clears held-key tracking. NSH's native menu popovers observe releases while holding GTK's
+keyboard grab, routing them to the original press target without reporting popup presses as view input. NumLock
+and other layout selectors survive the GTK boundary; only Shift and CapsLock are removed to name the logical key.
+Ordinary views with no raw listener or capture keep the existing fast path. `KeyEvent::text` is a keyval preview;
+native inputs and `Terminal` keep their own text-input behavior.
+
+The API belongs to Rust UI sets, with Linux and Linux-desktop headless providers. A TSX app can use an app-specific
+Rust component that forwards the events it needs. The shared cross-platform `onWheel` API and its `deltaMode`
+payload stay in `ops.rs`; the headless wheel path uses `input::wheel_listener` and `input::scroll_target`, so an
+observer on or outside a scroll view hears the wheel while that scroll view still scrolls.
 
 ## Checking a change: `nsh test --target linux`
 
