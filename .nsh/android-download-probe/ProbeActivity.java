@@ -33,6 +33,7 @@ public final class ProbeActivity extends Activity {
     private final AtomicInteger once = new AtomicInteger();
     private final AtomicInteger post = new AtomicInteger();
     private final AtomicInteger owned = new AtomicInteger();
+    private final AtomicInteger attribute = new AtomicInteger();
     private final BlockingQueue<InputStream> ownedStreams = new LinkedBlockingQueue<>();
     private ServerSocket server;
 
@@ -58,7 +59,7 @@ public final class ProbeActivity extends Activity {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 note("INTERCEPT method=" + request.getMethod() + " url=" + request.getUrl()
                         + " main=" + request.isForMainFrame() + " headers=" + request.getRequestHeaders().keySet());
-                if (request.getUrl().getPath().equals("/owned-once")) {
+                if (request.getUrl().getPath().equals("/owned-once") || request.getUrl().getPath().equals("/owned-attr")) {
                     try {
                         final HttpURLConnection connection = (HttpURLConnection) new URL(request.getUrl().toString()).openConnection();
                         connection.setConnectTimeout(10000);
@@ -117,6 +118,9 @@ public final class ProbeActivity extends Activity {
                         } else if (path.equals("/owned-once")) {
                             int count = owned.incrementAndGet();
                             if (count > 1) { status = 410; body = "already-consumed"; }
+                        } else if (path.equals("/owned-attr")) {
+                            int count = attribute.incrementAndGet();
+                            if (count > 1) { status = 410; body = "already-consumed"; }
                         } else if (path.equals("/post")) {
                             post.incrementAndGet();
                             if (!method.equals("POST") || !new String(requestBody).equals("ticket=post-only")) {
@@ -130,6 +134,9 @@ public final class ProbeActivity extends Activity {
                                     + "onload=()=>{const b=new Blob(['probe-blob-content'],{type:'application/octet-stream'});"
                                     + "window.probeURL=URL.createObjectURL(b);let a=document.createElement('a');a.href=probeURL;a.download='probe.bin';document.body.append(a);a.click();};"
                                     + "</script><body>blob probe</body>";
+                        } else if (path.equals("/attribute-page")) {
+                            type = "text/html";
+                            body = "<!doctype html><body>HTTP download attribute<script>onload=()=>{let a=document.createElement('a');a.href='/owned-attr';a.download='probe.bin';document.body.append(a);a.click();};</script></body>";
                         } else if (!path.equals("/final")) {
                             type = "text/html"; body = "<!doctype html><body>probe</body>";
                         }
@@ -222,6 +229,20 @@ public final class ProbeActivity extends Activity {
                 while ((count = input.read(buffer)) != -1) { bytes.write(buffer, 0, count); output.write(buffer, 0, count); }
             }
             note("OWNED_ACCEPT requests=" + owned.get() + " bytes=" + bytes.size() + " exact=" + new String(bytes.toByteArray(), StandardCharsets.UTF_8).equals("original-response"));
+            downloads.clear();
+            runOnUiThread(() -> web.loadUrl(base + "/attribute-page"));
+            InputStream attributeResponse = ownedStreams.poll(12, TimeUnit.SECONDS);
+            if (attributeResponse != null) {
+                ByteArrayOutputStream attributeBytes = new ByteArrayOutputStream();
+                try (InputStream input = attributeResponse) {
+                    byte[] buffer = new byte[1024];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) attributeBytes.write(buffer, 0, count);
+                }
+                note("ATTRIBUTE_NATIVE_FIRST intercepted=true requests=" + attribute.get() + " bytes=" + attributeBytes.size());
+            } else {
+                note("ATTRIBUTE_NATIVE_FIRST intercepted=false requests=" + attribute.get() + " callback=" + downloads.poll());
+            }
         } catch (Exception error) { note("PROBE_ERROR " + error); }
         finally {
             try { if (server != null) server.close(); } catch (IOException ignored) {}
