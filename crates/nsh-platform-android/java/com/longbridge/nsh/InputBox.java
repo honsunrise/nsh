@@ -766,9 +766,9 @@ final class InputBox extends FrameLayout implements Node {
     void blur() {
         if (!edit.hasFocus()) return;
         hideKeyboard();
-        // To the (focusable) root: clearFocus() would hand focus to the first
+        // To the window's root: clearFocus() would hand focus to the first
         // focusable view, often another field.
-        mounter.host.requestFocus();
+        mounter.releaseFocusOf(this);
     }
 
     private void hideKeyboard() {

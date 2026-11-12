@@ -58,6 +58,50 @@ test("a captured tab stays in the focused view", async () => {
   expect(app.shows("text:focus:capturedTab")).toBe(true);
 });
 
+test("a focusable view without onPress takes focus on a tap", async () => {
+  const app = await open("./App.tsx");
+  await app.press("id:noPress");
+  await app.waitFor("text:focus:noPress");
+  await app.keyboard.press("a");
+  await app.waitFor("text:key:a");
+  expect(app.shows("text:captured:false")).toBe(true);
+});
+
+test("a scroll view ancestor hears and captures a focused child's key", async () => {
+  const app = await open("./App.tsx");
+  await app.press("id:scrollChild");
+  await app.waitFor("text:focus:scrollChild");
+  await app.keyboard.press("a");
+  await app.waitFor("text:scrollKey:a");
+  await app.waitFor("text:scrollCaptured:true");
+  expect(app.shows("text:captured:true")).toBe(true);
+  expect(app.shows("text:focus:scrollChild")).toBe(true);
+});
+
+test("a portal notifies and captures its logical ancestor", async () => {
+  const app = await open("./App.tsx");
+  await app.press("id:openPortalsA");
+  await app.waitFor("id:childA");
+  await app.press("id:childA");
+  await app.waitFor("text:focus:childA");
+  await app.keyboard.press("a");
+  await app.waitFor("text:hostAKey:a");
+  await app.waitFor("text:hostACaptured:true");
+  await app.waitFor("text:hostACount:1");
+});
+
+test("a sibling portal does not capture another portal's ancestor", async () => {
+  const app = await open("./App.tsx");
+  await app.press("id:openPortalsB");
+  await app.waitFor("id:childB");
+  await app.press("id:childB");
+  await app.waitFor("text:focus:childB");
+  await app.keyboard.press("a");
+  await app.waitFor("text:childBKey:a");
+  await app.waitFor("text:childBCaptured:false");
+  expect(app.shows("text:hostACount:0")).toBe(true);
+});
+
 test("shift+tab moves the focus back", async () => {
   const app = await open("./App.tsx");
   await app.press("id:second");

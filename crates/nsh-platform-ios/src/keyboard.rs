@@ -9,7 +9,13 @@
 //! `pressesCancelled:withEvent:`). A focused view reports one
 //! [`KeyEvent`](nsh_core::KeyEvent) per transition and lets the engine
 //! bubble it to the listening ancestors in its window; an ancestor that is
-//! not the first responder reports nothing itself.
+//! not the first responder reports nothing itself. Listeners and capture
+//! rules are read from the mounter's metadata for the focused node and every
+//! logical ancestor (a scroll view included), stopping at a modal's window
+//! boundary as the core's bubbling does. A portaled view (an `Overlay`, whose
+//! native Insert is at the root) uses the core's `ViewProps::key_parent`
+//! override for these walks; its layout and hit-testing parent stays the
+//! native one.
 //!
 //! The app's shortcuts ([`crate::keymap`]) keep their precedence: a press
 //! they consume never becomes a raw notification. Otherwise the mounted
@@ -31,8 +37,10 @@
 //!   to `UIKey.charactersIgnoringModifiers`, the layout's unmodified
 //!   character; never to a US layout guess. Named keys (`Enter`, `Escape`,
 //!   `Tab`, `Backspace`, `Delete`, `ArrowLeft`, `F1`, `Shift`, ...) keep
-//!   the DOM's spelling. Capture matching canonicalizes through the HID
-//!   usage separately.
+//!   the DOM's spelling. Capture matching canonicalizes through the same
+//!   `keymap::keystroke` the app's shortcuts use, so a layout's reported
+//!   character wins over its HID position on both sides (a French `a` on
+//!   the US `q` key captures `a`, not `q`).
 //! - `text` is `UIKey.characters`, a preview only, and only on a press that
 //!   types (not a release, not with Control, Option or Command held).
 //! - UIKit delivers a held key's press once and reports no auto-repeat:
@@ -65,7 +73,6 @@ use nsh_core::{
     EventKind, EventPayload, KeyEvent, PhysicalKey,
     element::SharedString,
     keymap::{Key, Keystroke, Modifiers},
-    platform::Os,
 };
 use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject, sel};
 use objc2_foundation::{NSArray, NSSet, NSString};
@@ -232,7 +239,7 @@ pub(crate) fn began(view: &NshView, presses: &NSSet<UIPress>) -> bool {
     }
     let mtm = view.mtm();
     let state = target.keyboard();
-    let listens = listens(view);
+    let listens = listens(view, &target);
     let mut consumed = false;
     let mut tab: Option<bool> = None;
     let mut activates = false;
@@ -244,8 +251,11 @@ pub(crate) fn began(view: &NshView, presses: &NSSet<UIPress>) -> bool {
             continue;
         };
         let down = event(&key, usage, state, true);
-        let stroke = down.keystroke(Os::Ios);
-        let captured = listens && captures(view, &down);
+        // The same canonical stroke the app's keymap uses: HID-first
+        // normalization would disagree on a layout whose character differs
+        // from the US key's position.
+        let stroke = crate::keymap::keystroke(&key);
+        let captured = listens && captures(view, &target, stroke.as_ref());
         if captured || listens {
             let mut reported = down;
             reported.captured = captured;
@@ -297,7 +307,7 @@ pub(crate) fn ended(view: &NshView, presses: &NSSet<UIPress>) -> bool {
     }
     let mtm = view.mtm();
     let state = target.keyboard();
-    let listens = listens(view);
+    let listens = listens(view, &target);
     let mut handled = false;
     for press in presses.iter() {
         let Some(key) = press.key(mtm) else {
@@ -308,9 +318,10 @@ pub(crate) fn ended(view: &NshView, presses: &NSSet<UIPress>) -> bool {
         };
         let was_held = state.is_held(usage);
         let up = event(&key, usage, state, false);
+        let stroke = crate::keymap::keystroke(&key);
         if listens || was_held {
             let mut reported = up;
-            reported.captured = captures(view, &reported);
+            reported.captured = captures(view, &target, stroke.as_ref());
             target.dispatch(view.id(), EventKind::KeyUp, EventPayload::Key(reported));
             handled = true;
         }
@@ -486,35 +497,22 @@ fn text_of(characters: &str, modifiers: Modifiers) -> Option<SharedString> {
     }
 }
 
-/// Whether `view` or one of its ancestors hears raw keys or captures them:
-/// only then is a `KeyEvent` built.
-fn listens(view: &NshView) -> bool {
-    let mut current = Some(Retained::into_super(view.retain()));
-    while let Some(v) = current {
-        if let Some(view) = v.downcast_ref::<NshView>()
-            && view.listens_key()
-        {
-            return true;
-        }
-        current = v.superview();
-    }
-    false
+/// Whether `view` or a logical ancestor hears raw keys or captures them:
+/// only then is a `KeyEvent` built. The mounter's metadata covers every
+/// managed node (a scroll view too), not just `NshView`s.
+fn listens(view: &NshView, target: &EventTarget) -> bool {
+    target.listens_keys(view.id()) || view.listens_key()
 }
 
-/// Whether the focused view or one of its enabled ancestors captures
-/// `event` under its mounted `capture_keys` rule.
-fn captures(view: &NshView, event: &KeyEvent) -> bool {
-    let stroke = event.keystroke(Os::Ios);
-    let mut current = Some(Retained::into_super(view.retain()));
-    while let Some(v) = current {
-        if let Some(view) = v.downcast_ref::<NshView>()
-            && view.captures_key(stroke.as_ref())
-        {
-            return true;
-        }
-        current = v.superview();
-    }
-    false
+/// Whether the focused view or an enabled logical ancestor captures
+/// `stroke` (the keymap's canonical keystroke) under its mounted
+/// `capture_keys` rule.
+fn captures(
+    view: &NshView,
+    target: &EventTarget,
+    stroke: Option<&Keystroke>,
+) -> bool {
+    target.captures_stroke(view.id(), stroke) || view.captures_key(stroke)
 }
 
 /// The `UIKeyCommand`s that let a mounted capture take Tab before UIKit's
@@ -525,9 +523,12 @@ pub(crate) fn tab_key_commands(
     view: &NshView,
     inherited: Option<Retained<NSArray<UIKeyCommand>>>,
 ) -> Option<Retained<NSArray<UIKeyCommand>>> {
+    let Some(target) = view.keyboard_target() else {
+        return inherited;
+    };
     let mut commands = inherited.map(|array| array.to_vec()).unwrap_or_default();
     for flags in tab_flag_combinations() {
-        if !captures_tab(view, flags) {
+        if !captures_tab(view, &target, flags) {
             continue;
         }
         let input = NSString::from_str("\t");
@@ -571,23 +572,14 @@ fn tab_flag_combinations() -> Vec<UIKeyModifierFlags> {
     combinations
 }
 
-/// Whether the focused view or an enabled ancestor captures Tab with
-/// `flags`.
-fn captures_tab(view: &NshView, flags: UIKeyModifierFlags) -> bool {
+/// Whether the focused view or an enabled logical ancestor captures Tab
+/// with `flags`.
+fn captures_tab(view: &NshView, target: &EventTarget, flags: UIKeyModifierFlags) -> bool {
     let stroke = Keystroke {
         key: Key::Tab,
         modifiers: modifiers_of(flags),
     };
-    let mut current = Some(Retained::into_super(view.retain()));
-    while let Some(v) = current {
-        if let Some(view) = v.downcast_ref::<NshView>()
-            && view.captures_key(Some(&stroke))
-        {
-            return true;
-        }
-        current = v.superview();
-    }
-    false
+    target.captures_stroke(view.id(), Some(&stroke)) || view.captures_key(Some(&stroke))
 }
 
 /// `nshTabKeyCommand:`: the app's binding first, then the mounted capture
@@ -612,8 +604,8 @@ pub(crate) fn tab_command(view: &NshView, command: &UIKeyCommand) {
     if crate::keymap::tab_binding_consumes(&target, stroke, view.takes_presses()) {
         return;
     }
-    let captured = captures_tab(view, flags);
-    if captured || listens(view) {
+    let captured = captures_tab(view, &target, flags);
+    if captured || listens(view, &target) {
         let mut event = KeyEvent::default();
         event.key = SharedString::from("Tab");
         event.modifiers = stroke.modifiers;

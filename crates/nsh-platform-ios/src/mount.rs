@@ -494,6 +494,19 @@ struct Slot {
     style: ViewStyle,
     decor: Decor,
     events: EventMask,
+    /// The logical parent the core inserted this node in, for hardware-key
+    /// ancestry even when the native view is hosted elsewhere (a screen, a
+    /// modal, a header item).
+    parent: Option<NodeId>,
+    /// `ViewProps::key_capture`: the rule this node mounts for its focused
+    /// descendants (not only `NshView`: a scroll view has one too).
+    key_capture: nsh_core::KeyCapture,
+    /// `ViewProps::accessibility.state.disabled`, for capture rules.
+    disabled: bool,
+    /// `ViewProps::key_parent`: the logical parent of a portaled view (an
+    /// overlay's native Insert is at the root, not under its app parent).
+    /// `None` uses the Insert parent.
+    key_parent: Option<NodeId>,
     gestures: Gestures,
     bindings: Vec<(AnimationProp, nsh_core::animation::NodeId)>,
     values: GestureValues,
@@ -560,6 +573,10 @@ impl Slot {
             native,
             style: ViewStyle::default(),
             events: EventMask::default(),
+            parent: None,
+            key_capture: nsh_core::KeyCapture::None,
+            disabled: false,
+            key_parent: None,
             gestures: Gestures::default(),
             bindings: Vec::new(),
             values: GestureValues::default(),
@@ -1122,6 +1139,9 @@ impl Mounter {
                 child,
                 before,
             } => {
+                if let Some(s) = self.slot_mut(child) {
+                    s.parent = Some(parent);
+                }
                 if self.insert_hosted(parent, child, before) {
                     return false;
                 }
@@ -1151,6 +1171,9 @@ impl Mounter {
                 }
             }
             MountItem::Remove { id } => {
+                if let Some(s) = self.slot_mut(id) {
+                    s.parent = None;
+                }
                 if self.remove_hosted(id) {
                     return false;
                 }
@@ -2645,6 +2668,59 @@ impl Mounter {
         self.report_state(id, nsh_core::tailwind::state::FOCUSED, focused);
     }
 
+    /// Whether `id` or a logical ancestor listens to raw key events or
+    /// mounts a capture rule. Walks the core's ancestry, preferring a
+    /// portaled node's `key_parent` over the native Insert parent, so a
+    /// scroll view or any other managed node counts and an Overlay keeps
+    /// its app parent. Stops at the modal's own window boundary as the
+    /// core's bubbling does.
+    pub(crate) fn listens_keys(&self, id: NodeId) -> bool {
+        let mut current = Some(id);
+        let mut seen = rustc_hash::FxHashSet::default();
+        while let Some(id) = current {
+            if !seen.insert(id) {
+                break;
+            }
+            let Some(slot) = self.slot(id) else { break };
+            if slot.events.contains(EventKind::KeyDown)
+                || slot.events.contains(EventKind::KeyUp)
+                || !slot.key_capture.is_none()
+            {
+                return true;
+            }
+            if matches!(&slot.native, Native::Modal(_)) {
+                break;
+            }
+            current = slot.key_parent.or(slot.parent);
+        }
+        false
+    }
+
+    /// Whether the enabled `id` or a logical ancestor captures `stroke`
+    /// (the keymap's canonical keystroke) with its mounted `capture_keys`.
+    pub(crate) fn captures_stroke(
+        &self,
+        id: NodeId,
+        stroke: Option<&nsh_core::keymap::Keystroke>,
+    ) -> bool {
+        let mut current = Some(id);
+        let mut seen = rustc_hash::FxHashSet::default();
+        while let Some(id) = current {
+            if !seen.insert(id) {
+                break;
+            }
+            let Some(slot) = self.slot(id) else { break };
+            if !slot.disabled && slot.key_capture.captures_key(stroke) {
+                return true;
+            }
+            if matches!(&slot.native, Native::Modal(_)) {
+                break;
+            }
+            current = slot.key_parent.or(slot.parent);
+        }
+        false
+    }
+
     /// The native view whose subtree Tab walks from `view`: the modal view
     /// it is in, else the surface's root, so Tab never enters the stops a
     /// presented modal covers. `None` when the view is in neither.
@@ -3261,6 +3337,7 @@ impl Mounter {
             nsh.set_target(&target);
             nsh.set_events(events);
             nsh.set_pressable(events.contains(EventKind::Press), &control);
+            nsh.update_focus_tap(&target);
         }
         self.sync_refresh(id);
     }
@@ -3898,6 +3975,9 @@ impl Mounter {
         let (control, mtm, target) = (self.control.clone(), self.mtm, self.target.clone());
         let native_id = props.native_id.clone();
         let Some(s) = self.slot_mut(id) else { return };
+        s.key_capture = props.key_capture.clone();
+        s.disabled = props.accessibility.state.disabled;
+        s.key_parent = props.key_parent;
         s.long_press_delay = props.long_press_delay;
         s.pan_scroll_handoff = props.pan_scroll_handoff;
         if let Some(pan) = &s.gestures.pan {
@@ -3929,6 +4009,7 @@ impl Mounter {
             Some(view) => {
                 view.set_props(props, &control);
                 view.set_target(&target);
+                view.update_focus_tap(&target);
             }
             None => {
                 // Scroll views and inputs: only what UIKit offers directly.
@@ -4003,6 +4084,18 @@ impl Mounter {
                 let label = label.as_deref().map(objc2_foundation::NSString::from_str);
                 s.native.view().setAccessibilityLabel(label.as_deref(), mtm);
             }
+        }
+    }
+
+    /// A tap on a `focusable` view that takes no presses: it takes the
+    /// keyboard focus without claiming the touch. The pressable path
+    /// ([`Mounter::press_changed`]) focuses those with press handlers.
+    pub(crate) fn focus_node(&mut self, id: NodeId) {
+        if let Some(view) = self.slot(id).and_then(|s| s.native.focus_view())
+            && view.is_focus_stop()
+            && view.becomeFirstResponder()
+        {
+            crate::keyboard::request_focus(view);
         }
     }
 

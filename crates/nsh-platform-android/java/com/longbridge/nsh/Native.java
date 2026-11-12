@@ -259,28 +259,31 @@ final class Native {
      * {@code text}: what it types with Shift (its preview and raw {@code key});
      * {@code scanCode}: the physical scan code (0: Android supplied none); {@code repeat}: an
      * auto-repeat; {@code editing}: a text input or hosted view has the focus; {@code focusedId}:
-     * the focused node ({@code ROOT_ID} when {@code NshView} holds the focus, `0` for a native
-     * child that owns its keys); {@code captured}: a mounted rule
+     * the focused node ({@code ROOT_ID} when {@code NshView} holds the focus, a modal's id in its
+     * dialog, `0` for a native child that owns its keys); {@code windowId}: that window's root node
+     * for `nsh/keymap` bindings; {@code control}: the focused node takes presses (`Keymap::find_at`);
+     * {@code captured}: a mounted rule
      * captures it; {@code raw}: the focused view or an ancestor hears raw keys. No capture rule
      * or listener builds no raw event.
      */
     static native boolean keyDown(long handle, int keyCode, int unicode, int text, int meta, int scanCode,
-            boolean repeat, boolean editing, int focusedId, boolean captured, boolean raw);
+            boolean repeat, boolean editing, int focusedId, int windowId, boolean control,
+            boolean captured, boolean raw);
 
     /**
-     * A hardware key went up: whether its press was taken (then so is its release). The raw
-     * {@code KeyUp} goes to {@code focusedId} when its press was raw ({@code 0}: a native child
-     * has the keys now).
+     * A hardware key went up: whether its release is consumed (the app's shortcuts held it, or a
+     * mounted rule captures it now). The raw {@code KeyUp} goes to {@code focusedId} when the
+     * current listeners/raw policy accept it ({@code 0}: a native child has the keys).
      */
     static native boolean keyUp(long handle, int keyCode, int unicode, int text, int meta, int scanCode,
-            int focusedId);
+            int focusedId, boolean captured, boolean raw);
 
     /**
      * A key with Control came as a shortcut first: whether the app's shortcuts take it. No raw
      * event is reported here; a key the shortcuts leave goes on to {@link #keyDown}.
      */
-    static native boolean keyShortcut(long handle, int keyCode, int unicode, int meta, boolean repeat,
-            boolean editing);
+    static native boolean keyShortcut(long handle, int keyCode, int unicode, int meta, int windowId,
+            boolean control, boolean repeat, boolean editing);
 
     /** A key's release was cancelled: forget it without a {@code KeyUp}; whether its press was taken. */
     static native boolean keyCancel(long handle, int keyCode);
