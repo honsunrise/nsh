@@ -5101,7 +5101,7 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The root of the window `key` is in, `key` itself when it is one.
-    fn key_window(&self, key: Key) -> NodeId {
+    pub(super) fn key_window(&self, key: Key) -> NodeId {
         let node = &self.nodes[key as usize];
         if node.kind == Kind::Modal && self.window_ids.values().any(|(root, _)| *root == node.id) {
             node.id
