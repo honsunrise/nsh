@@ -261,6 +261,12 @@ ancestors within the same window:
   the window procedure handles as the key down it was. No `WM_CHAR` / `WM_SYSCHAR` is made, and the message queue is
   never inspected, moved or restamped: a character queued before, around or after the key keeps its place and its
   delivery. The hook is thread-scoped, so an embedding host's own message loop is covered without a DLL.
+- Keyboard ancestry for interest and capture follows `ViewProps::key_parent` when core sets it (a view a native
+  surface portals at a root it does not logically live under, such as an `Overlay`): the walk uses the logical parent
+  instead of the mounted `Insert` parent, and still stops at a window of the app's own. The override is read from
+  the cached `ViewProps` (core updates it on portal creation/reparent), so no extra mount item is sent. Focus, hit
+  testing and layout keep the mounted parent; the notification is still dispatched once to the focused view and the
+  engine bubbles it to the logical ancestors.
 - A modal presented over a window saves the custom view with the focus, as it saves a text field, and gives it back
   when it closes if that view is still attached, enabled and shown in a window no modal covers.
 - The raw path is only for a focused custom view: a text field (`Input`, the system's RichEdit and IME) and a hosted
