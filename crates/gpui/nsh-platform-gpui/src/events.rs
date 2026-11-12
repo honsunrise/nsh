@@ -466,10 +466,17 @@ pub(crate) fn install<V: gpui::EntityInputHandler>(
             repeat: false,
             modifiers: crate::keys::modifiers(&e.keystroke.modifiers),
         };
-        if crate::native::focused(&s, window) {
-            crate::input::component_key(&s, event, raw.as_ref());
+        // A release a capture rule took is kept from the window's own
+        // handlers, as a captured press is; so is the Alt release the
+        // window swallows once Alt + key was ours.
+        let handled = if crate::native::focused(&s, window) {
+            crate::input::component_key(&s, event, raw.as_ref())
         } else {
-            crate::input::window_key(&s, event, raw);
+            crate::input::window_key(&s, event, raw)
+        };
+        if handled {
+            cx.stop_propagation();
+            window.prevent_default();
         }
         crate::rt::flush(cx);
     });
