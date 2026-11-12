@@ -4399,7 +4399,7 @@ mod tests {
     /// `event`'s key as a test names it (`"a"`, `"Enter"`, `"Space"`); a
     /// space is `"Space"` here, not the `" "` a payload calls it.
     fn key_name(event: &KeyEvent) -> String {
-        match event.key.name() {
+        match event.key.as_ref() {
             " " => "Space".to_owned(),
             name => name.to_owned(),
         }
@@ -4427,7 +4427,7 @@ mod tests {
                     .on_press(move |_: &()| {})
                     .on_focus(move |_: &()| first_focus.update(|n| *n += 1))
                     .on_key_down(move |e: &KeyEvent| {
-                        key.set(format!("first {}", e.key.name()));
+                        key.set(format!("first {}", e.key.as_ref()));
                     }),
             )
             .child(
@@ -4438,7 +4438,7 @@ mod tests {
                     .element_ref(&second)
                     .on_focus(move |_: &()| second_focus.update(|n| *n += 1))
                     .on_key_down(move |e: &KeyEvent| {
-                        key.set(format!("second {}", e.key.name()));
+                        key.set(format!("second {}", e.key.as_ref()));
                     }),
             )
             .child(
@@ -4486,7 +4486,7 @@ mod tests {
         view()
             .flex_1()
             .on_key_down(move |e: &KeyEvent| {
-                ancestor.set(format!("{} {}", e.key.name(), e.captured));
+                ancestor.set(format!("{} {}", e.key.as_ref(), e.captured));
             })
             .child(
                 view()
@@ -4495,10 +4495,10 @@ mod tests {
                     .focusable(true)
                     .on_press(move |_: &()| {})
                     .on_key_down(move |e: &KeyEvent| {
-                        down.set(e.key.name().to_owned());
+                        down.set(e.key.as_ref().to_owned());
                         captured.set(e.captured);
                     })
-                    .on_key_up(move |e: &KeyEvent| up.set(e.key.name().to_owned())),
+                    .on_key_up(move |e: &KeyEvent| up.set(e.key.as_ref().to_owned())),
             )
             .child(text(move || format!("down {}", down.get())))
             .child(text(move || format!("captured {}", captured.get())))
@@ -4518,12 +4518,118 @@ mod tests {
         // ancestor hears the same key.
         app.wait_for("captured false").unwrap();
         app.wait_for("ancestor a false").unwrap();
-        // The key came up on the view it went down on.
+        // The key came up on the focused view.
         app.wait_for("up a").unwrap();
         app.press_key("b").unwrap();
         app.wait_for("down b").unwrap();
         app.wait_for("ancestor b false").unwrap();
         app.wait_for("up b").unwrap();
+    }
+
+    /// Two pads, each telling which view heard a key up.
+    #[component]
+    fn ReleaseFocus() -> impl IntoElement {
+        let up = signal(String::from("none"));
+        view()
+            .flex_1()
+            .child(
+                view()
+                    .test_id("first")
+                    .h(px(40.0))
+                    .focusable(true)
+                    .on_press(move |_: &()| {})
+                    .on_key_up({
+                        let up = up;
+                        move |_: &KeyEvent| up.set("first".into())
+                    }),
+            )
+            .child(
+                view()
+                    .test_id("second")
+                    .h(px(40.0))
+                    .focusable(true)
+                    .on_press(move |_: &()| {})
+                    .on_key_up(move |_: &KeyEvent| up.set("second".into())),
+            )
+            .child(text(move || format!("up {}", up.get())))
+    }
+
+    #[test]
+    fn a_key_up_goes_to_the_view_focused_when_the_source_reports_it() {
+        let mut app = start_linux(Root::of::<ReleaseFocus>());
+        app.first_render().unwrap();
+        // Tab focuses the first pad; the next Tab is heard by it, moves the
+        // focus to the second pad, and its release belongs to that one.
+        app.press_key("tab").unwrap();
+        app.press_key("tab").unwrap();
+        app.wait_for("up second").unwrap();
+    }
+
+    /// A pad reporting the raw key event's logical key, text and whether
+    /// the source gave a physical identity.
+    #[component]
+    fn RawKey() -> impl IntoElement {
+        let heard = signal(String::from("none"));
+        view().flex_1().child(
+            view()
+                .test_id("pad")
+                .h(px(40.0))
+                .focusable(true)
+                .on_press(move |_: &()| {})
+                .on_key_down(move |e: &KeyEvent| {
+                    heard.set(format!(
+                        "{} {} {}",
+                        e.key,
+                        e.text.as_deref().unwrap_or("none"),
+                        e.physical.is_none()
+                    ));
+                }),
+        )
+        .child(text(move || format!("heard {}", heard.get())))
+    }
+
+    #[test]
+    fn a_raw_key_reports_the_simulated_source_without_inventing_a_scan_code() {
+        let mut app = start_linux(Root::of::<RawKey>());
+        app.first_render().unwrap();
+        app.press_key("tab").unwrap();
+        // Shift's case is the reported logical key, and the source has no
+        // hardware scan for the simulation to pass on.
+        app.press_key("shift+k").unwrap();
+        app.wait_for("heard K K true").unwrap();
+        // A named key types nothing.
+        app.press_key("enter").unwrap();
+        app.wait_for("heard Enter none true").unwrap();
+    }
+
+    /// A view that hears raw keys around a text input.
+    #[component]
+    fn InputOwnsKeys() -> impl IntoElement {
+        let heard = signal(String::from("none"));
+        let text = signal(String::new());
+        view()
+            .flex_1()
+            .on_key_down(move |e: &KeyEvent| heard.set(e.key.as_ref().to_owned()))
+            .child(
+                input()
+                    .test_id("name")
+                    .value(move || text.get())
+                    .on_change(move |value: &str| text.set(value.to_owned())),
+            )
+            .child(text(move || format!("heard {}", heard.get())))
+            .child(text(move || format!("text {}", text.get())))
+    }
+
+    #[test]
+    fn a_native_input_owns_its_keys_and_a_listener_around_it_hears_none() {
+        let mut app = start_linux(Root::of::<InputOwnsKeys>());
+        app.first_render().unwrap();
+        app.type_text("id:name", "x").unwrap();
+        // The press edits the focused input; the ancestor's raw listener
+        // never intercepts it.
+        app.press_key("a").unwrap();
+        app.wait_for("text xa").unwrap();
+        app.wait_for("heard none").unwrap();
     }
 
     /// A pad that captures "a", in a view that hears the keys it lets
@@ -4536,7 +4642,7 @@ mod tests {
         view()
             .flex_1()
             .on_key_down(move |e: &KeyEvent| {
-                ancestor.set(format!("{} {}", e.key.name(), e.captured));
+                ancestor.set(format!("{} {}", e.key.as_ref(), e.captured));
             })
             .child(
                 view()
@@ -4544,11 +4650,12 @@ mod tests {
                     .h(px(40.0))
                     .focusable(true)
                     .on_press(move |_: &()| {})
-                    .capture_keys(KeyCapture::keys(
-                        [Keystroke::parse("a", Os::Linux).unwrap()],
-                    ))
+                    .capture_keys(KeyCapture::keys([
+                        Keystroke::parse("a", Os::Linux).unwrap(),
+                        Keystroke::parse("shift+a", Os::Linux).unwrap(),
+                    ]))
                     .on_key_down(move |e: &KeyEvent| {
-                        down.set(format!("{} {}", e.key.name(), e.captured));
+                        down.set(format!("{} {}", e.key.as_ref(), e.captured));
                     })
                     .on_key_up(move |e: &KeyEvent| {
                         up.set(format!("{} {}", key_name(e), e.captured));
@@ -4565,11 +4672,18 @@ mod tests {
         app.first_render().unwrap();
         app.press_key("tab").unwrap();
         // Captured: the view and its ancestor hear it, marked captured, so
-        // no default follows. The release carries the down's decision.
+        // no default follows. The release says the same.
         app.press_key("a").unwrap();
         app.wait_for("down a true").unwrap();
         app.wait_for("up a true").unwrap();
         app.wait_for("ancestor a true").unwrap();
+        // The raw key reports Shift's case ("A"), while the mounted capture
+        // rule is the canonical shortcut "shift+a": matching is over the
+        // keystroke, not the raw key text.
+        app.press_key("shift+a").unwrap();
+        app.wait_for("down A true").unwrap();
+        app.wait_for("up A true").unwrap();
+        app.wait_for("ancestor A true").unwrap();
         // Not captured: the notification says so, the release too, and the
         // platform runs its defaults.
         app.press_key("b").unwrap();
@@ -4649,7 +4763,7 @@ mod tests {
                     .on_press(move |_: &()| {})
                     .capture_keys(KeyCapture::All)
                     .on_key_down(move |e: &KeyEvent| {
-                        heard.set(format!("{} {}", e.key.name(), e.captured));
+                        heard.set(format!("{} {}", e.key.as_ref(), e.captured));
                     }),
             )
             .child(text(move || format!("heard {}", heard.get())))
@@ -4974,7 +5088,7 @@ mod tests {
     #[component]
     fn KeyDisabled() -> impl IntoElement {
         let disabled = signal(false);
-        let ups = signal(0_u32);
+        let downs = signal(0_u32);
         view()
             .flex_1()
             .child(
@@ -4985,11 +5099,11 @@ mod tests {
                     .disabled(move || disabled.get())
                     .on_press(move |_: &()| {})
                     .on_key_down(move |e: &KeyEvent| {
-                        if matches!(&e.key, Key::Named(NamedKey::Delete)) {
+                        downs.update(|n| *n += 1);
+                        if e.key == "Delete" {
                             disabled.set(true);
                         }
-                    })
-                    .on_key_up(move |_: &KeyEvent| ups.update(|n| *n += 1)),
+                    }),
             )
             .child(
                 view()
@@ -4997,7 +5111,7 @@ mod tests {
                     .on_press(move |_: &()| disabled.set(false))
                     .child(text("Enable")),
             )
-            .child(text(move || format!("ups {}", ups.get())))
+            .child(text(move || format!("downs {}", downs.get())))
     }
 
     #[test]
@@ -5007,18 +5121,18 @@ mod tests {
         app.press_key("tab").unwrap();
         // Its keys reach it while it can hold the focus.
         app.press_key("a").unwrap();
-        app.wait_for("ups 1").unwrap();
+        app.wait_for("downs 1").unwrap();
         // Delete disables it while it has the focus: from then on it hears
-        // nothing.
+        // no key down.
         app.press_key("delete").unwrap();
-        app.wait_for("ups 2").unwrap();
+        app.wait_for("downs 2").unwrap();
         app.press_key("b").unwrap();
-        app.wait_for("ups 2").unwrap();
+        app.wait_for("downs 2").unwrap();
         // Enabled again, Tab takes the focus back and its keys reach it.
         app.press("id:enable").unwrap();
         app.press_key("tab").unwrap();
         app.press_key("c").unwrap();
-        app.wait_for("ups 3").unwrap();
+        app.wait_for("downs 3").unwrap();
     }
 
     /// The main window captures every key; a window of the app's own holds
@@ -5213,7 +5327,7 @@ mod tests {
     #[component]
     fn KeyWindowFocus() -> impl IntoElement {
         let pad_disabled = signal(false);
-        let ups = signal(0_u32);
+        let downs = signal(0_u32);
         let pad = element_ref();
         view()
             .flex_1()
@@ -5232,11 +5346,11 @@ mod tests {
                                     .disabled(move || pad_disabled.get())
                                     .on_press(move |_: &()| pad.focus())
                                     .on_key_down(move |e: &KeyEvent| {
-                                        if matches!(&e.key, Key::Named(NamedKey::Delete)) {
+                                        downs.update(|n| *n += 1);
+                                        if e.key == "Delete" {
                                             pad_disabled.set(true);
                                         }
-                                    })
-                                    .on_key_up(move |_: &KeyEvent| ups.update(|n| *n += 1)),
+                                    }),
                             )
                         }),
                 ),
@@ -5247,7 +5361,7 @@ mod tests {
                     .on_press(move |_: &()| pad_disabled.set(false))
                     .child(text("Enable")),
             )
-            .child(text(move || format!("ups {}", ups.get())))
+            .child(text(move || format!("downs {}", downs.get())))
     }
 
     #[test]
@@ -5258,18 +5372,18 @@ mod tests {
         // The disabled ancestor in the main window must not suppress it.
         app.press("id:pad").unwrap();
         app.press_key("a").unwrap();
-        app.wait_for("ups 1").unwrap();
-        // Its already-queued release arrives, but a disabled pad takes
-        // no subsequent press/release pair.
+        app.wait_for("downs 1").unwrap();
+        // The pad disables itself on Delete; it takes no subsequent key
+        // down.
         app.press_key("delete").unwrap();
-        app.wait_for("ups 2").unwrap();
+        app.wait_for("downs 2").unwrap();
         app.press_key("b").unwrap();
-        app.wait_for("ups 2").unwrap();
+        app.wait_for("downs 2").unwrap();
         // Enable it from the main window, then activate its own window again.
         app.press("id:enable").unwrap();
         app.press("id:pad").unwrap();
         app.press_key("c").unwrap();
-        app.wait_for("ups 3").unwrap();
+        app.wait_for("downs 3").unwrap();
     }
 
     /// A web view in a view that listens to the wheel itself.

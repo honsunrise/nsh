@@ -19,7 +19,8 @@
 //! A native popup (a context menu, the menu bar's menus, their nested
 //! submenus) grabs the keyboard: its releases never reach the window's
 //! controller. [`observe_popovers`] watches them where they are delivered,
-//! so a key held while a menu opens still releases its original target.
+//! so a release reaches the view focused now, as a browser reports a key
+//! up on the focused element whichever view heard its press.
 //!
 //! Views stay unfocusable until Tab or `focus()` picks them: GTK also
 //! hands the focus around by itself (to the first focusable widget as a
@@ -155,9 +156,13 @@ pub(crate) fn watch(surface: &Rc<Surface>, window: &gtk::Window) {
                 .and_then(|root| root.downcast::<gtk::Window>().ok());
             let modifiers =
                 crate::keyboard::modifier_state(keys.current_event().as_ref(), modifiers);
+            let focused = window
+                .as_ref()
+                .and_then(|window| focused_view(&surface, window));
             crate::keyboard::released(
                 &surface,
                 window.as_ref(),
+                focused.as_ref(),
                 keyval,
                 keycode,
                 modifiers,
@@ -205,6 +210,13 @@ fn focused_stop(surface: &Surface, focus: Option<gtk::Widget>) -> Option<NshView
         .filter(is_stop)
 }
 
+/// The view a release is reported to: the stop focused now in `window`
+/// (the main window, or one of the app's own). Nothing when the window has
+/// no focused view any more.
+pub(crate) fn focused_view(surface: &Surface, window: &gtk::Window) -> Option<NshView> {
+    focused_stop(surface, GtkWindowExt::focus(window))
+}
+
 /// Watches the keys a native popup receives while it owns the keyboard
 /// grab: a context menu, the menu bar's menus and their nested submenus
 /// (`GtkPopoverMenu`s), all under `widget`.
@@ -239,9 +251,11 @@ pub(crate) fn observe_popovers(surface: &Rc<Surface>, widget: &gtk::Widget) {
             if let (Some(surface), Some(window)) = (released.upgrade(), window) {
                 let modifiers =
                     crate::keyboard::modifier_state(keys.current_event().as_ref(), modifiers);
+                let focused = focused_view(&surface, &window);
                 crate::keyboard::released(
                     &surface,
                     Some(&window),
+                    focused.as_ref(),
                     keyval,
                     keycode,
                     modifiers,
@@ -314,8 +328,10 @@ fn moved(surface: &Surface, window: &gtk::Window, current: &RefCell<Option<NshVi
 /// menu). True when the key is consumed.
 ///
 /// A focused view whose ancestry hears none of the raw keys and captures
-/// none builds no raw [`KeyEvent`] and records no down target; the app's
-/// bindings, the menu and [`defaults`] decide. Modifier transitions stay tracked.
+/// none builds no raw [`KeyEvent`]; the app's bindings, the menu and
+/// [`defaults`] decide. A native input or native content focus owns its
+/// keys the same way, capture rules around it aside. Modifier transitions
+/// stay tracked.
 pub(crate) fn press(
     surface: &Rc<Surface>,
     widget: Option<&gtk::Widget>,
@@ -370,11 +386,12 @@ pub(crate) fn press(
         }
         return false;
     };
-    if !crate::keyboard::listens(&view) {
-        // A view with no raw keys keeps the original path: the app's
-        // bindings (GTK's controller) first, then the menu's shortcut,
-        // then the defaults. Return and Space on a control fire only the
-        // focus' own (a menu button's opening its menu, `keymap::fires`).
+    if !crate::keyboard::listens(&view) || crate::keyboard::native_owns(&view) {
+        // A view with no raw keys (or a native input/content that owns its
+        // keys) keeps the original path: the app's bindings (GTK's
+        // controller) first, then the menu's shortcut, then the defaults.
+        // Return and Space on a control fire only the focus' own (a menu
+        // button's opening its menu, `keymap::fires`).
         if event.is_some_and(|event| crate::keymap::claims(surface, event)) {
             return false;
         }
@@ -397,7 +414,8 @@ pub(crate) fn press(
         }
     }
     // A key the layout cannot name (a dead key) is still a `KeyDown`
-    // (`Unidentified`), so a capture that takes every key gets it.
+    // (`Dead`, or `Unidentified`), so a capture that takes every key gets
+    // it. The capture decides over the canonical shortcut keystroke.
     let mut key_event = crate::keyboard::key_event(
         surface,
         &view,
@@ -407,9 +425,9 @@ pub(crate) fn press(
         crate::keyboard::KeyPhase::Down { repeat },
         group,
     );
-    let captured = crate::keyboard::captures(&view, &key_event);
+    let captured = crate::keyboard::captures(&view, &key_event, keycode, modifiers, group);
     key_event.captured = captured;
-    crate::keyboard::notify(surface, &view, key_event);
+    crate::keyboard::notify(surface, &view, EventKind::KeyDown, key_event);
     if captured {
         // The view took the key: no menu shortcut, traversal, activation or
         // context menu.
@@ -544,8 +562,8 @@ fn show_context_menu(surface: &Surface, view: &NshView) -> bool {
 #[cfg(test)]
 mod tests {
     use nsh_core::{
-        EventMask, KeyCapture, KeyEvent, MountItem, NamedKey, NodeId, ROOT_ID, ViewProps,
-        keymap::Keystroke, platform::Os,
+        EventMask, KeyCapture, MountItem, NodeId, ROOT_ID, ViewProps, keymap::Keystroke,
+        platform::Os,
     };
 
     use super::*;
@@ -598,11 +616,26 @@ mod tests {
             .expect("a keycode")
     }
 
-    /// A key event of `key`.
-    fn key_event(key: nsh_core::Key) -> KeyEvent {
-        let mut event = KeyEvent::default();
-        event.key = key;
-        event
+    /// Whether a press of `key` is captured by `view`'s ancestry, from the
+    /// display's keycode for it.
+    fn captured(surface: &Surface, view: &NshView, key: gdk::Key) -> bool {
+        let keycode = keycode(key);
+        let event = crate::keyboard::key_event(
+            surface,
+            view,
+            key,
+            keycode,
+            gdk::ModifierType::empty(),
+            crate::keyboard::KeyPhase::Down { repeat: false },
+            0,
+        );
+        crate::keyboard::captures(
+            view,
+            &event,
+            keycode,
+            gdk::ModifierType::empty(),
+            0,
+        )
     }
 
     #[test]
@@ -722,17 +755,13 @@ mod tests {
                 crate::keyboard::listens(&child),
                 "an ancestor's raw listener reaches the child"
             );
-            let event = key_event(nsh_core::Key::Named(NamedKey::Escape));
-            assert!(crate::keyboard::captures(&child, &event));
-            assert!(!crate::keyboard::captures(
-                &child,
-                &key_event(nsh_core::Key::Named(NamedKey::Enter))
-            ));
+            assert!(captured(&surface, &child, gdk::Key::Escape));
+            assert!(!captured(&surface, &child, gdk::Key::Return));
             // A disabled view captures nothing.
             props(&surface, 2, |props| {
                 props.accessibility.state.disabled = true;
             });
-            assert!(!crate::keyboard::captures(&child, &event));
+            assert!(!captured(&surface, &child, gdk::Key::Escape));
         });
     }
 
@@ -763,8 +792,8 @@ mod tests {
                 crate::keyboard::KeyPhase::Down { repeat: false },
                 0,
             );
-            assert_eq!(event.key, nsh_core::Key::Named(NamedKey::Unidentified));
-            assert_eq!(event.physical, 0);
+            assert_eq!(event.key, "Unidentified");
+            assert_eq!(event.physical, None);
             assert!(event.text.is_none());
             // `All` takes it before the defaults.
             props(&surface, 2, |props| props.key_capture = KeyCapture::All);
@@ -820,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_up_returns_to_the_view_it_went_down_on() {
+    fn a_release_is_reported_to_the_view_focused_then() {
         run(|| {
             let surface = surface();
             views(&surface);
@@ -833,6 +862,7 @@ mod tests {
             crate::keyboard::notify(
                 &surface,
                 &first,
+                EventKind::KeyDown,
                 crate::keyboard::key_event(
                     &surface,
                     &first,
@@ -844,43 +874,24 @@ mod tests {
                 ),
             );
             assert!(crate::keyboard::held_key(&surface, 9));
-            assert_eq!(crate::keyboard::down_target(&surface, 9), Some(2));
-            // The focus moves while the key is held: it is not released,
-            // and its key up still returns to the view it went down on.
+            // A focus move keeps the key held, and the view focused at the
+            // source's release is the one the key up goes to.
             focus(&last);
             assert!(last.is_focus());
-            assert!(
-                crate::keyboard::held_key(&surface, 9),
-                "a focus move is no release"
-            );
-            assert_eq!(crate::keyboard::down_target(&surface, 9), Some(2));
-            // Its auto-repeat goes down on the new focus, but keeps the
-            // original target for the key up.
-            crate::keyboard::notify(
-                &surface,
-                &last,
-                crate::keyboard::key_event(
-                    &surface,
-                    &last,
-                    gdk::Key::Escape,
-                    9,
-                    gdk::ModifierType::empty(),
-                    crate::keyboard::KeyPhase::Down { repeat: true },
-                    0,
-                ),
-            );
-            assert_eq!(crate::keyboard::down_target(&surface, 9), Some(2));
-            // The release ends the hold.
+            assert!(crate::keyboard::held_key(&surface, 9));
+            assert_eq!(focused_view(&surface, &window).map(|v| v.id()), Some(4));
+            // The release ends the hold; there is no original down target
+            // to send it back to.
             crate::keyboard::released(
                 &surface,
                 Some(&window),
+                focused_view(&surface, &window).as_ref(),
                 gdk::Key::Escape,
                 9,
                 gdk::ModifierType::empty(),
                 0,
             );
             assert!(!crate::keyboard::held_key(&surface, 9));
-            assert_eq!(crate::keyboard::down_target(&surface, 9), None);
             window.destroy();
         });
     }
@@ -1013,7 +1024,7 @@ mod tests {
                     assert!(x.key(crate::xtest::CONTROL_L, true));
                     assert!(x.key(crate::xtest::char_keysym('n'), true));
                     assert!(
-                        wait_until(|| crate::keyboard::down_target(&surface, n) == Some(2)),
+                        wait_until(|| crate::keyboard::held_key(&surface, n)),
                         "the capture hears the key the application menu also binds"
                     );
                     assert!(window.is_visible(), "the menu action did not run");
@@ -1021,9 +1032,7 @@ mod tests {
                     assert!(x.key(crate::xtest::CONTROL_L, false));
                 })
                 .expect("real XTest is required");
-                assert!(wait_until(
-                    || crate::keyboard::down_target(&surface, n).is_none()
-                ));
+                assert!(wait_until(|| !crate::keyboard::held_key(&surface, n)));
                 window.destroy();
             });
         }
@@ -1085,15 +1094,11 @@ mod tests {
                     focus(&first);
                     assert!(wait_until(|| first.is_focus()));
                     assert!(x.key(crate::xtest::char_keysym('k'), true));
-                    assert!(wait_until(
-                        || crate::keyboard::down_target(&surface, k) == Some(2)
-                    ));
-                    assert!(crate::keyboard::held_key(&surface, k));
+                    assert!(wait_until(|| crate::keyboard::held_key(&surface, k)));
                     menu.popup();
                     assert!(wait_until(|| menu.is_mapped()));
-                    assert_eq!(
-                        crate::keyboard::down_target(&surface, k),
-                        Some(2),
+                    assert!(
+                        crate::keyboard::held_key(&surface, k),
                         "opening the popup releases nothing"
                     );
                     // A key pressed in the popup is the popup's, not the view's.
@@ -1111,18 +1116,16 @@ mod tests {
                     let j = keycode(gdk::Key::j);
                     assert!(x.key(crate::xtest::char_keysym('j'), true));
                     assert!(wait_until(|| seen.get()), "the popup hears its key");
-                    assert_eq!(
-                        crate::keyboard::down_target(&surface, j),
-                        None,
+                    assert!(
+                        !crate::keyboard::held_key(&surface, j),
                         "a popup's key is not reported to a view"
                     );
                     assert!(x.key(crate::xtest::char_keysym('j'), false));
                     assert!(x.key(crate::xtest::char_keysym('k'), false));
                     assert!(
-                        wait_until(|| crate::keyboard::down_target(&surface, k).is_none()),
-                        "the popup's grab passes the release to the original target"
+                        wait_until(|| !crate::keyboard::held_key(&surface, k)),
+                        "the popup's grab reports the release"
                     );
-                    assert!(!crate::keyboard::held_key(&surface, k));
                     menu.popdown();
                 })
                 .expect("real XTest is required");
