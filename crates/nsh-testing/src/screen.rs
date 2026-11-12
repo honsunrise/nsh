@@ -218,6 +218,10 @@ struct View {
     /// a press one of them matches is the platform's, so it types nothing
     /// and runs no default.
     key_capture: KeyCapture,
+    /// The logical parent of a portaled view for keyboard ancestry
+    /// (`ViewProps::key_parent`): its `parent` is the native host the core
+    /// inserted it into, which need not be its keyboard ancestor.
+    key_parent: Option<NodeId>,
     /// It is selected (`selected`, its accessibility state; a canvas node's
     /// `selected`).
     selected: bool,
@@ -517,6 +521,7 @@ impl Screen {
                 view.focusable = props.focusable;
                 view.tab_after = props.tab_after;
                 view.key_capture = props.key_capture.clone();
+                view.key_parent = props.key_parent;
                 view.selected = props.accessibility.state.selected;
                 view.accessibility_state = props.accessibility.state;
                 view.level = props.accessibility.level;
@@ -2461,7 +2466,16 @@ impl Screen {
             if id == window {
                 return false;
             }
-            current = view.parent;
+            let parent = view.key_parent.or(view.parent);
+            // A logical parent outside this window is not its ancestor, as
+            // the platform keeps key routing inside one window.
+            if let Some(parent) = parent
+                && parent != window
+                && self.window_of(parent) != window
+            {
+                return false;
+            }
+            current = parent;
         }
         false
     }
@@ -2967,6 +2981,51 @@ mod tests {
         let mut takers = screen.drag_takers(2);
         takers.sort_unstable();
         assert_eq!(takers, [4, 6, 16]);
+    }
+
+    /// Two portaled views share a native overlay host: one points at a
+    /// logical ancestor that captures, the other at an unrelated one.
+    #[test]
+    fn capture_follows_key_parent_not_the_native_insert_parent() {
+        let mut screen = Screen::default();
+        let props = |id, change: fn(&mut nsh_core::ViewProps)| {
+            let mut props = nsh_core::ViewProps::default();
+            change(&mut props);
+            MountItem::ViewProps {
+                id,
+                props: Box::new(props),
+            }
+        };
+        screen.apply(&batch(vec![
+            create(2, ViewKind::View),
+            create(3, ViewKind::View),
+            create(4, ViewKind::View),
+            create(5, ViewKind::View),
+            create(7, ViewKind::View),
+            insert(ROOT, 2),
+            insert(ROOT, 5),
+            insert(ROOT, 7),
+            insert(5, 3),
+            insert(5, 4),
+            props(2, |props| props.key_capture = KeyCapture::All),
+            props(3, |props| {
+                props.key_parent = Some(2);
+                props.focusable = Some(true);
+            }),
+            props(4, |props| {
+                props.key_parent = Some(7);
+                props.focusable = Some(true);
+            }),
+        ]));
+        let stroke = Keystroke::parse_with("escape", false).expect("a stroke");
+        assert!(
+            screen.captures_key(3, &stroke),
+            "the portal reaches its logical ancestor"
+        );
+        assert!(
+            !screen.captures_key(4, &stroke),
+            "the unrelated portal is not under that ancestor"
+        );
     }
 
     fn batch(items: Vec<MountItem>) -> MountBatch {
