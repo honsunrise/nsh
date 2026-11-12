@@ -38,6 +38,16 @@ const QUERY: &[u8] = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[?u\x1b[?2026$p\x1b[c";
 /// The kitty keyboard flags the host pushes: Escape and modified keys as
 /// CSI-u sequences, the event kinds (`Repeat` and `Release`), and the
 /// alternate key that carries the shifted character of the user's layout.
+///
+/// `REPORT_ALL_KEYS_AS_ESCAPE_CODES` (kitty's flag 8) is deliberately not
+/// here, though it would report plain text keys' repeats and releases: it
+/// stops the terminal sending those keys' text at all ("text will not be
+/// sent, instead only key events are sent"); the text is only reportable
+/// with `REPORT_ASSOCIATED_TEXT` (flag 16), the third field of a CSI-u
+/// event, which crossterm drops. Composed input (dead keys, IME, an AltGr
+/// character) would then be lost or arrive as the base key's character,
+/// which is worse than a missing release. Only a parser that reads that
+/// field (crossterm's gap, not this host's) makes flag 8 safe.
 const KEYBOARD_FLAGS: event::KeyboardEnhancementFlags =
     event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         .union(event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
