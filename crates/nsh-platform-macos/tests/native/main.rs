@@ -18,6 +18,8 @@ mod ime;
 #[cfg(target_os = "macos")]
 mod input_hidden;
 #[cfg(target_os = "macos")]
+mod keyboard;
+#[cfg(target_os = "macos")]
 mod menu_labels;
 #[cfg(target_os = "macos")]
 mod mount;
@@ -58,6 +60,9 @@ fn main() {
                 || std::env::var_os("NSH_ZOOM_PINCH_CHECK_ONLY").is_some()
             {
                 zoom::run();
+            } else if std::env::var_os("NSH_KEYBOARD_CHECK_ONLY").is_some() {
+                window_press::run();
+                keyboard::run();
             } else if std::env::var_os("NSH_EMBEDDED_SCROLL_CHECK_ONLY").is_some() {
                 embedded_scroll::run();
             } else if std::env::var_os("NSH_PRESS_MOMENTUM_CHECK_ONLY").is_some() {
@@ -69,6 +74,7 @@ fn main() {
                 window_dialog::run();
                 menu_labels::run();
                 window_frames::run();
+                keyboard::run();
                 ime::run();
                 input_hidden::run();
                 zoom::run();
