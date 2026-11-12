@@ -1,0 +1,924 @@
+//! Hardware keys on the focused view: the `on_key_down` / `on_key_up`
+//! notifications a focusable view and its ancestors hear, the mounted
+//! capture rules that decide whether a key runs a default, and Tab's focus
+//! traversal.
+//!
+//! UIKit delivers a key to the first responder as `UIPress`es
+//! ([`crate::native_view::NshView`] overrides `pressesBegan:withEvent:`,
+//! `pressesChanged:withEvent:`, `pressesEnded:withEvent:` and
+//! `pressesCancelled:withEvent:`). A focused view reports one
+//! [`KeyEvent`](nsh_core::KeyEvent) per transition and lets the engine
+//! bubble it to the listening ancestors in its window; an ancestor that is
+//! not the first responder reports nothing itself.
+//!
+//! The app's shortcuts ([`crate::keymap`]) keep their precedence: a press
+//! they consume never becomes a raw notification. Otherwise the mounted
+//! capture rules of the focused view and its enabled ancestors decide
+//! whether the key runs a default (`KeyEvent::captured`). A captured key
+//! still notifies. Tab and Shift+Tab move the keyboard focus between the
+//! focus stops (inputs and `focusable` views) unless a rule captures them;
+//! Return and Space press a focused view that takes presses, as the other
+//! backends do.
+//!
+//! What the source gives:
+//!
+//! - The physical key is `UIKey.keyCode`, the USB HID usage.
+//! - The logical key is the character the source reports for this press
+//!   (`UIKey.characters`: its case, Shift and layout included, so Shift+A
+//!   is `"A"`, a US keyboard's Shift+/ is `"?"`, and a German or Cyrillic
+//!   key keeps its own character). Only a chord whose `characters` is no
+//!   printable text (Control's `\u{1}`, an empty composition) falls back
+//!   to `UIKey.charactersIgnoringModifiers`, the layout's unmodified
+//!   character; never to a US layout guess. Named keys (`Enter`, `Escape`,
+//!   `Tab`, `Backspace`, `Delete`, `ArrowLeft`, `F1`, `Shift`, ...) keep
+//!   the DOM's spelling. Capture matching canonicalizes through the HID
+//!   usage separately.
+//! - `text` is `UIKey.characters`, a preview only, and only on a press that
+//!   types (not a release, not with Control, Option or Command held).
+//! - UIKit delivers a held key's press once and reports no auto-repeat:
+//!   `repeat` is always false here, and `pressesChanged:` (whose keyboard
+//!   transitions UIKit does not document) reports nothing. An app that
+//!   wants repeats starts its own timer from the press.
+//!
+//! Tab has two paths. With no focused view, UIKit's focus engine moves
+//! through the views that answer `canBecomeFocused` (the same stops); the
+//! surface's `didUpdateFocusInContext:` then makes the focused view the
+//! first responder. That initial traversal is the system's: no key press
+//! reaches `pressesBegan:` and there is no first responder to return a key
+//! command, so a mounted capture cannot take it. On a focused view, a
+//! mounted rule that captures Tab returns `UIKeyCommand`s with
+//! `wantsPriorityOverSystemBehavior` for exactly the captured modifier
+//! combinations: the app's Tab binding runs first, then the capture keeps
+//! the key (an uncaptured Tab follows the normal traversal). A Tab
+//! delivered by that command has no `UIPress`: its `KeyDown` has
+//! `physical: None`, `repeat: false`, and no `KeyUp` is invented. Command+Tab
+//! is the system's app switcher and is never intercepted.
+//!
+//! Blur, cancellation and deactivation clear the keys a view holds without
+//! synthesizing a release: the source delivered no `pressesEnded:`, so no
+//! `KeyUp` is invented. A real release that arrives after the focus moved
+//! is reported on the view that has the focus then (the DOM's behavior).
+
+use std::cell::{Cell, RefCell};
+
+use nsh_core::{
+    EventKind, EventPayload, KeyEvent, PhysicalKey,
+    element::SharedString,
+    keymap::{Key, Keystroke, Modifiers},
+    platform::Os,
+};
+use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject, sel};
+use objc2_foundation::{NSArray, NSSet, NSString};
+use objc2_ui_kit::{
+    UIKey, UIKeyCommand, UIKeyModifierFlags, UIFocusEnvironment, UIFocusSystem, UIFocusUpdateContext,
+    UIPress, UIView,
+};
+
+use crate::{
+    input::{Area, Field},
+    native_view::NshView,
+    target::EventTarget,
+};
+
+/// `UIKeyboardHIDUsageKeyboardTab`.
+const TAB: u16 = 0x2B;
+/// `UIKeyboardHIDUsageKeyboardSpacebar`.
+const SPACE: u16 = 0x2C;
+
+/// Keyboard state of one surface: the physical keys whose press this
+/// surface reported, and the modifier keys it saw pressed.
+pub(crate) struct Keyboard {
+    /// The HID usages a `KeyDown` was sent for, until their release or the
+    /// state is cleared (blur, cancellation, deactivation).
+    held: RefCell<rustc_hash::FxHashSet<u16>>,
+    /// The physical modifier keys held, with the modifier each stands for:
+    /// releasing one Shift keeps Shift while the other is still held.
+    modifiers: RefCell<rustc_hash::FxHashMap<u16, UIKeyModifierFlags>>,
+    /// Modifiers UIKit reports that no physical key seen here accounts for
+    /// (held before the focused view got the keys).
+    unseen: Cell<UIKeyModifierFlags>,
+}
+
+impl Default for Keyboard {
+    fn default() -> Self {
+        Self {
+            held: RefCell::default(),
+            modifiers: RefCell::default(),
+            unseen: Cell::new(UIKeyModifierFlags::empty()),
+        }
+    }
+}
+
+impl Keyboard {
+    /// Forgets every key held, without a release (blur, deactivation or the
+    /// surface's app stopping).
+    pub(crate) fn clear(&self) {
+        self.held.borrow_mut().clear();
+        self.modifiers.borrow_mut().clear();
+        self.unseen.set(UIKeyModifierFlags::empty());
+    }
+
+    fn down(&self, usage: u16) {
+        self.held.borrow_mut().insert(usage);
+    }
+
+    fn up(&self, usage: u16) -> bool {
+        self.held.borrow_mut().remove(&usage)
+    }
+
+    fn is_held(&self, usage: u16) -> bool {
+        self.held.borrow().contains(&usage)
+    }
+
+    /// The modifiers after `usage`'s transition, with a modifier key's own
+    /// mask taken from the physical modifier keys held (so one Shift's
+    /// release does not clear the other's). `flags` is UIKit's report.
+    fn effective_modifiers(
+        &self,
+        usage: u16,
+        flags: UIKeyModifierFlags,
+        down: bool,
+    ) -> Modifiers {
+        let Some(mask) = modifier_mask(usage) else {
+            self.observe(flags, None);
+            return modifiers_of(flags);
+        };
+        {
+            let mut held = self.modifiers.borrow_mut();
+            if down {
+                held.insert(usage, mask);
+            } else {
+                held.remove(&usage);
+            }
+            if down || held.values().any(|m| *m == mask) {
+                // A physical key stands for the mask; a UIKit report of it
+                // before this press is accounted for now.
+                self.unseen.set(self.unseen.get() & !mask);
+            }
+        }
+        let tracked = self.modifiers.borrow().values().any(|m| *m == mask);
+        let effective = tracked || self.unseen.get().contains(mask);
+        let mut flags = flags;
+        flags.set(mask, effective);
+        // The other masks are UIKit's; remember those no physical key seen
+        // here accounts for.
+        self.observe(flags, Some(mask));
+        modifiers_of(flags)
+    }
+
+    /// Records which of `flags` are held without a physical key seen here
+    /// (`own` is the mask of the modifier key whose transition is being
+    /// reported, already handled).
+    fn observe(&self, flags: UIKeyModifierFlags, own: Option<UIKeyModifierFlags>) {
+        let held = self.modifiers.borrow();
+        let mut unseen = self.unseen.get();
+        for mask in [
+            UIKeyModifierFlags::Shift,
+            UIKeyModifierFlags::Control,
+            UIKeyModifierFlags::Alternate,
+            UIKeyModifierFlags::Command,
+        ] {
+            if own == Some(mask) {
+                continue;
+            }
+            let tracked = held.values().any(|m| *m == mask);
+            if tracked {
+                unseen = unseen & !mask;
+            } else if flags.contains(mask) {
+                unseen |= mask;
+            } else {
+                unseen = unseen & !mask;
+            }
+        }
+        self.unseen.set(unseen);
+    }
+}
+
+/// The modifier a physical modifier key stands for.
+fn modifier_mask(usage: u16) -> Option<UIKeyModifierFlags> {
+    Some(match usage {
+        0xE0 | 0xE4 => UIKeyModifierFlags::Control,
+        0xE1 | 0xE5 => UIKeyModifierFlags::Shift,
+        0xE2 | 0xE6 => UIKeyModifierFlags::Alternate,
+        0xE3 | 0xE7 => UIKeyModifierFlags::Command,
+        _ => return None,
+    })
+}
+
+fn modifiers_of(flags: UIKeyModifierFlags) -> Modifiers {
+    Modifiers {
+        ctrl: flags.contains(UIKeyModifierFlags::Control),
+        alt: flags.contains(UIKeyModifierFlags::Alternate),
+        shift: flags.contains(UIKeyModifierFlags::Shift),
+        cmd: flags.contains(UIKeyModifierFlags::Command),
+    }
+}
+
+/// `pressesBegan:withEvent:` of focusable view `view`: whether the view
+/// consumed the presses. It runs the app's shortcuts first, then reports a
+/// `KeyDown` per key (marked captured by the mounted rules), then the
+/// defaults a captured key never reaches.
+pub(crate) fn began(view: &NshView, presses: &NSSet<UIPress>) -> bool {
+    let Some(target) = view.keyboard_target() else {
+        return false;
+    };
+    if !view.isFirstResponder() {
+        return false;
+    }
+    // The app's shortcuts keep their precedence: a press they consume is no
+    // raw notification, and a pass-through one is reported and goes on.
+    if crate::keymap::began(&target, presses, false, view.takes_presses()) {
+        return true;
+    }
+    let mtm = view.mtm();
+    let state = target.keyboard();
+    let listens = listens(view);
+    let mut consumed = false;
+    let mut tab: Option<bool> = None;
+    let mut activates = false;
+    for press in presses.iter() {
+        let Some(key) = press.key(mtm) else {
+            continue;
+        };
+        let Some(usage) = usage(&key) else {
+            continue;
+        };
+        let down = event(&key, usage, state, true);
+        let stroke = down.keystroke(Os::Ios);
+        let captured = listens && captures(view, &down);
+        if captured || listens {
+            let mut reported = down;
+            reported.captured = captured;
+            target.dispatch(view.id(), EventKind::KeyDown, EventPayload::Key(reported));
+        }
+        state.down(usage);
+        consumed |= captured;
+        if usage == TAB && !flags_block_tab(&key) {
+            tab = Some(key.modifierFlags().contains(UIKeyModifierFlags::Shift));
+        } else if let Some(stroke) = stroke
+            && nsh_core::input::presses_focused_control(stroke.key, stroke.modifiers)
+            && view.takes_presses()
+        {
+            activates = true;
+        }
+    }
+    if consumed {
+        return true;
+    }
+    let mut handled = false;
+    if let Some(backward) = tab {
+        handled |= tab_focus(view, &target, backward);
+    }
+    if activates && !handled {
+        handled |= activate(view, &target);
+    }
+    handled
+}
+
+/// `pressesChanged:withEvent:`: UIKit documents no keyboard transition for
+/// it (a held key's repeat is not reported), so nothing is notified. The
+/// presses go on to the superclass.
+pub(crate) fn changed(_view: &NshView, _presses: &NSSet<UIPress>) -> bool {
+    false
+}
+
+/// `pressesEnded:withEvent:` of `view`: whether it consumed the releases.
+/// A real release is reported on the view that has the focus now, even if
+/// its press went elsewhere (the DOM's behavior).
+pub(crate) fn ended(view: &NshView, presses: &NSSet<UIPress>) -> bool {
+    let Some(target) = view.keyboard_target() else {
+        return false;
+    };
+    if !view.isFirstResponder() {
+        return false;
+    }
+    if crate::keymap::ended(&target, presses) {
+        return true;
+    }
+    let mtm = view.mtm();
+    let state = target.keyboard();
+    let listens = listens(view);
+    let mut handled = false;
+    for press in presses.iter() {
+        let Some(key) = press.key(mtm) else {
+            continue;
+        };
+        let Some(usage) = usage(&key) else {
+            continue;
+        };
+        let was_held = state.is_held(usage);
+        let up = event(&key, usage, state, false);
+        if listens || was_held {
+            let mut reported = up;
+            reported.captured = captures(view, &reported);
+            target.dispatch(view.id(), EventKind::KeyUp, EventPayload::Key(reported));
+            handled = true;
+        }
+        state.up(usage);
+    }
+    handled
+}
+
+/// `pressesCancelled:withEvent:` of `view`: whether it consumed the
+/// cancellations. None of them becomes a `KeyUp`: the source cancelled a
+/// press instead of releasing it, so no release is invented. What the
+/// cancelled keys held is forgotten.
+pub(crate) fn cancelled(view: &NshView, presses: &NSSet<UIPress>) -> bool {
+    let Some(target) = view.keyboard_target() else {
+        return false;
+    };
+    if !view.isFirstResponder() {
+        return false;
+    }
+    let mut cleared = crate::keymap::ended(&target, presses);
+    let mtm = view.mtm();
+    let state = target.keyboard();
+    let mut cancelled = false;
+    for press in presses.iter() {
+        let Some(key) = press.key(mtm) else {
+            continue;
+        };
+        let Some(usage) = usage(&key) else {
+            continue;
+        };
+        cleared |= state.up(usage);
+        if modifier_mask(usage).is_some() {
+            state.modifiers.borrow_mut().remove(&usage);
+        }
+        cancelled = true;
+    }
+    // A cancellation without a key (a remote's, a game controller's) says
+    // the surface took no key input: forget whatever is held.
+    if !cancelled && !cleared {
+        state.clear();
+    }
+    cleared
+}
+
+/// The HID usage of `key`, if it is one.
+fn usage(key: &UIKey) -> Option<u16> {
+    u16::try_from(key.keyCode().0).ok()
+}
+
+/// Whether Command, Option or Control is held with a Tab (which is then no
+/// focus traversal).
+fn flags_block_tab(key: &UIKey) -> bool {
+    key.modifierFlags().intersects(
+        UIKeyModifierFlags::Command | UIKeyModifierFlags::Alternate | UIKeyModifierFlags::Control,
+    )
+}
+
+/// The key event of `key`'s press (`down`) or release.
+fn event(key: &UIKey, usage: u16, state: &Keyboard, down: bool) -> KeyEvent {
+    event_from(
+        usage,
+        &key.characters().to_string(),
+        &key.charactersIgnoringModifiers().to_string(),
+        key.modifierFlags(),
+        state,
+        down,
+    )
+}
+
+/// [`event`] from what a `UIKey` reports, for the tests.
+fn event_from(
+    usage: u16,
+    characters: &str,
+    ignoring_modifiers: &str,
+    flags: UIKeyModifierFlags,
+    state: &Keyboard,
+    down: bool,
+) -> KeyEvent {
+    let named = named_key(usage);
+    let key = match named {
+        Some(name) => SharedString::from(name),
+        None => reported_key(characters, ignoring_modifiers),
+    };
+    let modifiers = state.effective_modifiers(usage, flags, down);
+    let mut event = KeyEvent::default();
+    // Space is a named key that types; every other named key types
+    // nothing.
+    if down && (named.is_none() || usage == SPACE) {
+        event.text = text_of(characters, modifiers);
+    }
+    event.key = key;
+    event.physical = Some(PhysicalKey::Native(u32::from(usage)));
+    event.modifiers = modifiers;
+    event.repeat = false;
+    event
+}
+
+/// The logical key of a character key: the character the source reports
+/// for this press, with its case and layout (`UIKey.characters`). Only
+/// when that is nothing printable (a Control or Option chord's control
+/// character, an empty composition) does the key fall back to the layout's
+/// unmodified character (`charactersIgnoringModifiers`), and never to a US
+/// layout guess. Capture canonicalization uses the HID usage separately.
+fn reported_key(characters: &str, ignoring_modifiers: &str) -> SharedString {
+    printable(characters)
+        .or_else(|| printable(ignoring_modifiers))
+        .map_or_else(
+            || SharedString::from("Unidentified"),
+            |text| SharedString::from(text.to_owned()),
+        )
+}
+
+/// `text` when it is something printable: not empty and no control
+/// character (a Control chord's `\u{1}`, Return's `\r`).
+fn printable(text: &str) -> Option<&str> {
+    (!text.is_empty() && !text.chars().any(char::is_control)).then_some(text)
+}
+
+/// The name of a named key by its HID usage: the DOM's
+/// `KeyboardEvent.key` spelling. Character keys (letters, digits,
+/// punctuation, the keypad's) have none.
+fn named_key(usage: u16) -> Option<&'static str> {
+    const F1_TO_F12: [&str; 12] = [
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    ];
+    const F13_TO_F24: [&str; 12] = [
+        "F13", "F14", "F15", "F16", "F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24",
+    ];
+    Some(match usage {
+        0x28 | 0x58 => "Enter",
+        0x29 => "Escape",
+        0x2A => "Backspace",
+        0x2B => "Tab",
+        0x2C => " ",
+        0x39 => "CapsLock",
+        0x3A..=0x45 => F1_TO_F12[usize::from(usage - 0x3A)],
+        0x46 => "PrintScreen",
+        0x47 => "ScrollLock",
+        0x48 => "Pause",
+        0x49 => "Insert",
+        0x4A => "Home",
+        0x4B => "PageUp",
+        0x4C => "Delete",
+        0x4D => "End",
+        0x4E => "PageDown",
+        0x4F => "ArrowRight",
+        0x50 => "ArrowLeft",
+        0x51 => "ArrowDown",
+        0x52 => "ArrowUp",
+        0x53 => "NumLock",
+        0x65 => "ContextMenu",
+        0x68..=0x73 => F13_TO_F24[usize::from(usage - 0x68)],
+        0x75 => "Help",
+        0xE0 | 0xE4 => "Control",
+        0xE1 | 0xE5 => "Shift",
+        0xE2 | 0xE6 => "Alt",
+        0xE3 | 0xE7 => "Meta",
+        _ => return None,
+    })
+}
+
+/// The text a press previews: one printable character from
+/// `UIKey.characters`, with no Control, Option or Command (which make
+/// shortcuts or compose other text).
+fn text_of(characters: &str, modifiers: Modifiers) -> Option<SharedString> {
+    if modifiers.ctrl || modifiers.alt || modifiers.cmd {
+        return None;
+    }
+    let mut chars = characters.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if !c.is_control() => Some(SharedString::from(c.to_string())),
+        _ => None,
+    }
+}
+
+/// Whether `view` or one of its ancestors hears raw keys or captures them:
+/// only then is a `KeyEvent` built.
+fn listens(view: &NshView) -> bool {
+    let mut current = Some(Retained::into_super(view.retain()));
+    while let Some(v) = current {
+        if let Some(view) = v.downcast_ref::<NshView>()
+            && view.listens_key()
+        {
+            return true;
+        }
+        current = v.superview();
+    }
+    false
+}
+
+/// Whether the focused view or one of its enabled ancestors captures
+/// `event` under its mounted `capture_keys` rule.
+fn captures(view: &NshView, event: &KeyEvent) -> bool {
+    let stroke = event.keystroke(Os::Ios);
+    let mut current = Some(Retained::into_super(view.retain()));
+    while let Some(v) = current {
+        if let Some(view) = v.downcast_ref::<NshView>()
+            && view.captures_key(stroke.as_ref())
+        {
+            return true;
+        }
+        current = v.superview();
+    }
+    false
+}
+
+/// The `UIKeyCommand`s that let a mounted capture take Tab before UIKit's
+/// focus system: one per captured modifier combination, with
+/// `wantsPriorityOverSystemBehavior`. Command+Tab is the system's app
+/// switcher and is never registered.
+pub(crate) fn tab_key_commands(
+    view: &NshView,
+    inherited: Option<Retained<NSArray<UIKeyCommand>>>,
+) -> Option<Retained<NSArray<UIKeyCommand>>> {
+    let mut commands = inherited.map(|array| array.to_vec()).unwrap_or_default();
+    for flags in tab_flag_combinations() {
+        if !captures_tab(view, flags) {
+            continue;
+        }
+        let input = NSString::from_str("\t");
+        // SAFETY: `nshTabKeyCommand:` is implemented by NshView, which owns
+        // the command and outlives it; a Tab input is valid.
+        let command = unsafe {
+            UIKeyCommand::keyCommandWithInput_modifierFlags_action(
+                &input,
+                flags,
+                sel!(nshTabKeyCommand:),
+                view.mtm(),
+            )
+        };
+        command.setWantsPriorityOverSystemBehavior(true);
+        commands.push(command);
+    }
+    (!commands.is_empty()).then(|| NSArray::from_retained_slice(&commands))
+}
+
+/// The modifier combinations a Tab command can carry: Shift, Control and
+/// Option in every combination. Command+Tab is the system's.
+fn tab_flag_combinations() -> Vec<UIKeyModifierFlags> {
+    let mut combinations = Vec::with_capacity(8);
+    for shift in [false, true] {
+        for ctrl in [false, true] {
+            for alt in [false, true] {
+                let mut flags = UIKeyModifierFlags::empty();
+                if shift {
+                    flags |= UIKeyModifierFlags::Shift;
+                }
+                if ctrl {
+                    flags |= UIKeyModifierFlags::Control;
+                }
+                if alt {
+                    flags |= UIKeyModifierFlags::Alternate;
+                }
+                combinations.push(flags);
+            }
+        }
+    }
+    combinations
+}
+
+/// Whether the focused view or an enabled ancestor captures Tab with
+/// `flags`.
+fn captures_tab(view: &NshView, flags: UIKeyModifierFlags) -> bool {
+    let stroke = Keystroke {
+        key: Key::Tab,
+        modifiers: modifiers_of(flags),
+    };
+    let mut current = Some(Retained::into_super(view.retain()));
+    while let Some(v) = current {
+        if let Some(view) = v.downcast_ref::<NshView>()
+            && view.captures_key(Some(&stroke))
+        {
+            return true;
+        }
+        current = v.superview();
+    }
+    false
+}
+
+/// `nshTabKeyCommand:`: the app's binding first, then the mounted capture
+/// (a captured Tab stays), else the normal traversal the priority command
+/// intercepted. A `UIKeyCommand` gives no HID usage, release or repeat, so
+/// the event has `physical: None`, `repeat: false`, and no `KeyUp` follows.
+pub(crate) fn tab_command(view: &NshView, command: &UIKeyCommand) {
+    let Some(target) = view.keyboard_target() else {
+        return;
+    };
+    if !view.isFirstResponder() || !view.is_focus_stop() {
+        return;
+    }
+    target.input_with(nsh_core::platform::InputModality::Keyboard);
+    let flags = command.modifierFlags();
+    let stroke = Keystroke {
+        key: Key::Tab,
+        modifiers: modifiers_of(flags),
+    };
+    // The app's shortcuts keep their precedence over the capture, as a
+    // UIPress's path does.
+    if crate::keymap::tab_binding_consumes(&target, stroke, view.takes_presses()) {
+        return;
+    }
+    let captured = captures_tab(view, flags);
+    if captured || listens(view) {
+        let mut event = KeyEvent::default();
+        event.key = SharedString::from("Tab");
+        event.modifiers = stroke.modifiers;
+        event.repeat = false;
+        event.captured = captured;
+        target.dispatch(view.id(), EventKind::KeyDown, EventPayload::Key(event));
+    }
+    if captured {
+        return;
+    }
+    // The rule went away between the query and the press: the command
+    // already stopped the system's traversal, so follow the normal one.
+    let modifiers = stroke.modifiers;
+    if !modifiers.ctrl && !modifiers.alt && !modifiers.cmd {
+        tab_focus(view, &target, modifiers.shift);
+    }
+}
+
+/// Tab / Shift+Tab from focused view `view`: the focus moves to the next or
+/// previous stop in its window (the modal it is in, when one is presented),
+/// wrapping around. True when another stop took the focus.
+fn tab_focus(view: &NshView, target: &EventTarget, backward: bool) -> bool {
+    let Some(window) = view.window() else {
+        return false;
+    };
+    let scope = target
+        .focus_scope(view)
+        .unwrap_or_else(|| Retained::into_super(window));
+    let mut stops = Vec::new();
+    collect_stops(&scope, &mut stops);
+    if stops.is_empty() {
+        return false;
+    }
+    let current = stops
+        .iter()
+        .position(|stop| std::ptr::eq::<UIView>(&**stop, view.as_ref()));
+    let mut at = current;
+    for _ in 0..stops.len() {
+        let Some(next) = nsh_core::input::tab_stop(at, stops.len(), backward, true) else {
+            return false;
+        };
+        if std::ptr::eq::<UIView>(&*stops[next], view.as_ref()) {
+            return false;
+        }
+        if stops[next].becomeFirstResponder() {
+            request_focus(&stops[next]);
+            return true;
+        }
+        at = Some(next);
+    }
+    false
+}
+
+/// The focus stops of `scope` in the native view tree's order: inputs that
+/// edit and visible `focusable` views.
+fn collect_stops(view: &UIView, stops: &mut Vec<Retained<UIView>>) {
+    for sub in view.subviews() {
+        if sub.isHidden() || sub.alpha() <= 0.01 {
+            continue;
+        }
+        if is_stop(&sub) && visible(&sub) {
+            stops.push(sub.clone());
+        }
+        collect_stops(&sub, stops);
+    }
+}
+
+fn is_stop(view: &UIView) -> bool {
+    if let Some(view) = view.downcast_ref::<NshView>() {
+        return view.is_focus_stop() && view.canBecomeFirstResponder();
+    }
+    if view.downcast_ref::<Field>().is_some() || view.downcast_ref::<Area>().is_some() {
+        // A disabled field or a read-only area decides natively.
+        return view.canBecomeFirstResponder();
+    }
+    false
+}
+
+/// Whether `view` and its ancestors are shown (a hidden or transparent
+/// ancestor hides it) and it is in a window.
+pub(crate) fn visible(view: &UIView) -> bool {
+    let mut current: Option<Retained<UIView>> = Some(view.retain());
+    while let Some(v) = current {
+        if v.isHidden() || v.alpha() <= 0.01 {
+            return false;
+        }
+        current = v.superview();
+    }
+    view.window().is_some()
+}
+
+/// Moves UIKit's focus system to `view` after a responder change the system
+/// did not initiate (`ref.focus()`, our own Tab traversal). The focus engine
+/// then continues from this item (its own Tab traversal) and the surface's
+/// `didUpdateFocusInContext:` sees the same view. Nothing happens where the
+/// window has no focus system.
+pub(crate) fn request_focus(view: &UIView) {
+    let environment: &ProtocolObject<dyn UIFocusEnvironment> =
+        ProtocolObject::from_ref(view);
+    if let Some(system) = UIFocusSystem::focusSystemForEnvironment(environment) {
+        system.requestFocusUpdateToEnvironment(environment);
+    }
+}
+
+/// `didUpdateFocusInContext:` of the surface: UIKit's focus engine chose
+/// `nextFocusedView`, so that view becomes the first responder (hardware
+/// keys follow the focused item) and a view or input of ours that lost the
+/// focus gives it up. An embedded native component's own focusable controls
+/// are left to the component (the previous responder still resigns, so its
+/// keys do not leak).
+#[allow(deprecated)]
+pub(crate) fn adopt_focus(context: &UIFocusUpdateContext) {
+    let next = context.nextFocusedView();
+    let previous = context.previouslyFocusedView();
+    let Some(next) = next else {
+        if let Some(previous) = previous.as_deref()
+            && is_ours(previous)
+        {
+            let _ = previous.resignFirstResponder();
+        }
+        return;
+    };
+    let accepted = if let Some(view) = next.downcast_ref::<NshView>() {
+        view.is_focus_stop() && view.becomeFirstResponder()
+    } else if next.downcast_ref::<Field>().is_some()
+        || next.downcast_ref::<Area>().is_some()
+    {
+        next.becomeFirstResponder()
+    } else {
+        false
+    };
+    if !accepted
+        && let Some(previous) = previous.as_deref()
+        && is_ours(previous)
+        && previous.isFirstResponder()
+    {
+        let _ = previous.resignFirstResponder();
+    }
+}
+
+/// A view whose keys this surface owns: its focusable views and the editor
+/// views of its inputs.
+fn is_ours(view: &UIView) -> bool {
+    view.downcast_ref::<NshView>().is_some()
+        || view.downcast_ref::<Field>().is_some()
+        || view.downcast_ref::<Area>().is_some()
+}
+
+/// Return or Space pressed the focused control: its `onPressDown`,
+/// `onPressUp` and `onPress`, as the same key does on the other backends.
+fn activate(view: &NshView, target: &EventTarget) -> bool {
+    if !view.takes_presses() {
+        return false;
+    }
+    let events = view.events();
+    let id = view.id();
+    let mut pressed = false;
+    for kind in [EventKind::PressDown, EventKind::PressUp, EventKind::Press] {
+        if events.contains(kind) {
+            target.dispatch(id, kind, EventPayload::None);
+            pressed = true;
+        }
+    }
+    pressed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(usage: u16, characters: &str, ignoring: &str, down: bool) -> KeyEvent {
+        event_from(
+            usage,
+            characters,
+            ignoring,
+            UIKeyModifierFlags::empty(),
+            &Keyboard::default(),
+            down,
+        )
+    }
+
+    #[test]
+    fn named_keys_use_the_doms_spelling() {
+        for (usage, name) in [
+            (0x28, "Enter"),
+            (0x58, "Enter"),
+            (0x29, "Escape"),
+            (0x2A, "Backspace"),
+            (0x2B, "Tab"),
+            (0x2C, " "),
+            (0x4C, "Delete"),
+            (0x4F, "ArrowRight"),
+            (0x50, "ArrowLeft"),
+            (0x51, "ArrowDown"),
+            (0x52, "ArrowUp"),
+            (0x3A, "F1"),
+            (0x45, "F12"),
+            (0x68, "F13"),
+            (0x73, "F24"),
+            (0xE1, "Shift"),
+            (0xE4, "Control"),
+            (0xE6, "Alt"),
+            (0xE3, "Meta"),
+        ] {
+            assert_eq!(named_key(usage), Some(name), "{usage:#04x}");
+        }
+        // Character keys have no name: their reported character is the key.
+        assert_eq!(named_key(0x04), None);
+        assert_eq!(event(0x04, "a", "a", true).key.as_str(), "a");
+        // A layout's own character, not the US layout's.
+        assert_eq!(event(0x1E, "&", "&", true).key.as_str(), "&");
+        assert_eq!(event(0x38, "/", "/", true).key.as_str(), "/");
+        // A key that types nothing stays in the event.
+        assert_eq!(event(0x39, "", "", true).key.as_str(), "CapsLock");
+        assert_eq!(event(0xFFFF, "", "", true).key.as_str(), "Unidentified");
+    }
+
+    #[test]
+    fn a_press_previews_its_text_and_a_release_none() {
+        let down = event(0x04, "A", "a", true);
+        assert_eq!(down.key.as_str(), "A");
+        assert_eq!(down.text.as_deref(), Some("A"));
+        assert!(matches!(down.physical, Some(PhysicalKey::Native(0x04))));
+        assert!(!down.repeat);
+
+        assert_eq!(event(0x04, "A", "a", false).text, None);
+
+        // Space types its space; named keys type nothing.
+        let space = event(0x2C, " ", " ", true);
+        assert_eq!(space.key.as_str(), " ");
+        assert_eq!(space.text.as_deref(), Some(" "));
+        let enter = event(0x28, "\r", "\r", true);
+        assert_eq!(enter.key.as_str(), "Enter");
+        assert_eq!(enter.text, None);
+        let arrow = event(0x50, "\u{F702}", "\u{F702}", true);
+        assert_eq!(arrow.key.as_str(), "ArrowLeft");
+        assert_eq!(arrow.text, None);
+    }
+
+    #[test]
+    fn reported_characters_keep_their_case_and_layout() {
+        use UIKeyModifierFlags as F;
+        // Shift+A and Caps Lock report `A`: the key keeps it.
+        for flags in [F::Shift, F::AlphaShift] {
+            let event = event_from(0x04, "A", "a", flags, &Keyboard::default(), true);
+            assert_eq!(event.key.as_str(), "A", "{flags:?}");
+            assert_eq!(event.text.as_deref(), Some("A"), "{flags:?}");
+        }
+        // A non-US shift (Cyrillic) is the layout's, never the US key's.
+        let cyrillic = event_from(0x04, "Ж", "ж", F::Shift, &Keyboard::default(), true);
+        assert_eq!(cyrillic.key.as_str(), "Ж");
+        assert_eq!(cyrillic.text.as_deref(), Some("Ж"));
+        // A Control chord reports a control character: the key falls back
+        // to the layout's unmodified character and previews no text.
+        let control = event_from(0x04, "\u{1}", "a", F::Control, &Keyboard::default(), true);
+        assert_eq!(control.key.as_str(), "a");
+        assert_eq!(control.text, None);
+        // An Option chord that composes nothing printable falls back too.
+        let option = event_from(0x04, "", "e", F::Alternate, &Keyboard::default(), true);
+        assert_eq!(option.key.as_str(), "e");
+        assert_eq!(option.text, None);
+    }
+
+    #[test]
+    fn command_alt_and_control_preview_no_text() {
+        use UIKeyModifierFlags as F;
+        for flags in [F::Command, F::Alternate, F::Control] {
+            let event = event_from(0x04, "a", "a", flags, &Keyboard::default(), true);
+            assert_eq!(event.text, None, "{flags:?}");
+            assert_eq!(event.key.as_str(), "a");
+        }
+        let shifted = event_from(0x04, "A", "a", F::Shift, &Keyboard::default(), true);
+        assert_eq!(shifted.text.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn two_shifts_keep_the_mask_until_both_are_up() {
+        use UIKeyModifierFlags as F;
+        let keyboard = Keyboard::default();
+        assert!(keyboard.effective_modifiers(0xE1, F::Shift, true).shift);
+        assert!(keyboard.effective_modifiers(0xE5, F::Shift, true).shift);
+        assert!(
+            keyboard.effective_modifiers(0xE1, F::Shift, false).shift,
+            "the right Shift still holds Shift"
+        );
+        assert!(!keyboard.effective_modifiers(0xE5, F::Shift, false).shift);
+    }
+
+    #[test]
+    fn a_modifier_held_before_the_focus_is_trusted() {
+        use UIKeyModifierFlags as F;
+        let keyboard = Keyboard::default();
+        // UIKit reports Shift for a key while no physical Shift was seen.
+        assert!(keyboard.effective_modifiers(0x04, F::Shift, true).shift);
+        // Seeing the left Shift press accounts for it, so its release
+        // clears Shift.
+        assert!(keyboard.effective_modifiers(0xE1, F::Shift, true).shift);
+        assert!(!keyboard.effective_modifiers(0xE1, F::Shift, false).shift);
+    }
+
+    #[test]
+    fn clearing_forgets_held_keys_without_events() {
+        let keyboard = Keyboard::default();
+        keyboard.down(0x04);
+        keyboard.clear();
+        assert!(!keyboard.is_held(0x04));
+    }
+}
