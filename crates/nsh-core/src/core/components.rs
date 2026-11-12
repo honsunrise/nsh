@@ -5001,6 +5001,38 @@ impl<M: TextEngine> Core<M> {
             .is_ok_and(|key| self.nodes[key as usize].mounted_events().contains(event))
     }
 
+    /// Whether `id` or an enabled logical ancestor up to its window root
+    /// hears a key transition (`KeyDown` or `KeyUp`) or has a capture rule
+    /// that is not `None`. Follows the logical tree (`node.parent`), so an
+    /// overlay's content finds the views it is logically in even where a
+    /// backend mounts it elsewhere. No allocation: a walk per transition.
+    pub fn key_interest(&self, id: NodeId) -> bool {
+        let Ok(mut key) = self.key(id) else {
+            return false;
+        };
+        let window = self.key_window(key);
+        loop {
+            let node = &self.nodes[key as usize];
+            let disabled = node
+                .props
+                .as_ref()
+                .is_some_and(|p| p.accessibility.state.disabled);
+            if !disabled {
+                let events = node.mounted_events();
+                if events.contains(EventKind::KeyDown) || events.contains(EventKind::KeyUp) {
+                    return true;
+                }
+                if node.props.as_ref().is_some_and(|p| !p.key_capture.is_none()) {
+                    return true;
+                }
+            }
+            if node.id == window || node.parent == NO_KEY {
+                return false;
+            }
+            key = node.parent;
+        }
+    }
+
     /// The views a key notification on `id` reaches, in order: `id`, then
     /// each enabled ancestor, up to and including the root of `id`'s window.
     /// The engine notifies every one of them (Rust and JS listeners alike)
@@ -5029,13 +5061,15 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// Whether `id` or an enabled ancestor within its window captures
-    /// `event`'s transition under its mounted [`crate::KeyCapture`] rule
-    /// (`captureKeys`). The platform decides before native defaults; a key
-    /// with no canonical shortcut stroke is still captured by
+    /// Whether `id` or an enabled ancestor within its window captures the
+    /// transition whose canonical shortcut stroke is `keystroke` under its
+    /// mounted [`crate::KeyCapture`] rule (`captureKeys`). The platform
+    /// decides before native defaults from the stroke its own shortcut
+    /// vocabulary names, not from [`crate::KeyEvent::physical`]; `None` (a
+    /// key no shortcut names) is captured only by
     /// [`crate::KeyCapture::All`]. A focused native text input keeps the
     /// keys that edit it: nothing captures them.
-    pub fn key_captured(&self, id: NodeId, event: &crate::KeyEvent) -> bool {
+    pub fn key_captured(&self, id: NodeId, keystroke: Option<&crate::keymap::Keystroke>) -> bool {
         let Ok(mut key) = self.key(id) else {
             return false;
         };
@@ -5044,7 +5078,6 @@ impl<M: TextEngine> Core<M> {
         if self.nodes[key as usize].kind == Kind::Input {
             return false;
         }
-        let keystroke = event.keystroke(self.components.environment.os);
         let window = self.key_window(key);
         loop {
             let node = &self.nodes[key as usize];
@@ -5056,7 +5089,7 @@ impl<M: TextEngine> Core<M> {
                 && node
                     .props
                     .as_ref()
-                    .is_some_and(|p| p.key_capture.captures_key(keystroke.as_ref()))
+                    .is_some_and(|p| p.key_capture.captures_key(keystroke))
             {
                 return true;
             }

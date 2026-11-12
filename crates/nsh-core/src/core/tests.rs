@@ -24588,7 +24588,7 @@ fn retained_views_clear_omitted_capture_rules() {
 
 #[test]
 fn key_capture_reads_mounted_rules_with_canonical_strokes() {
-    use crate::{KeyEvent, PhysicalKey, keymap::Keystroke, prelude::*};
+    use crate::{keymap::Keystroke, prelude::*};
 
     let stroke = Keystroke::parse_with("mod+k", true).unwrap();
     #[component]
@@ -24616,19 +24616,9 @@ fn key_capture_reads_mounted_rules_with_canonical_strokes() {
 
     // Command+K on Apple conventions; the same stroke's key with no
     // modifier is not it.
-    let mut event = KeyEvent::default();
-    event.key = "k".into();
-    event.modifiers.cmd = true;
-    assert!(c.key_captured(host, &event));
-    event.modifiers = crate::keymap::Modifiers::default();
-    assert!(!c.key_captured(host, &event));
-
-    // The physical code is the US-layout key, whatever the layout types.
-    let mut cyrillic = KeyEvent::default();
-    cyrillic.key = "л".into();
-    cyrillic.physical = Some(PhysicalKey::Code("KeyK".into()));
-    cyrillic.modifiers.cmd = true;
-    assert!(c.key_captured(host, &cyrillic));
+    assert!(c.key_captured(host, Some(&stroke)));
+    let plain_k = Keystroke::parse_with("k", true).unwrap();
+    assert!(!c.key_captured(host, Some(&plain_k)));
 
     // The path reaches the focused view and its ancestors, ending at the
     // window's root.
@@ -24636,6 +24626,112 @@ fn key_capture_reads_mounted_rules_with_canonical_strokes() {
     c.key_path(host, &mut path);
     assert_eq!(path.first(), Some(&host));
     assert_eq!(path.last(), Some(&crate::ROOT_ID));
+}
+
+/// Capture matches the stroke the adapter's own shortcut vocabulary names,
+/// not the event's physical code: a browser whose `KeyboardEvent.code`
+/// differs from the logical key (NumLock-off Numpad1 for End, AZERTY `z` on
+/// KeyW) captures what its existing shortcut matcher would.
+#[test]
+fn key_capture_uses_the_adapters_stroke_not_the_physical_code() {
+    use crate::{
+        KeyEvent, PhysicalKey,
+        keymap::{Key as ShortcutKey, Keystroke},
+        platform::Os,
+        prelude::*,
+    };
+
+    let end = Keystroke::parse_with("end", false).unwrap();
+    let z = Keystroke::parse_with("z", false).unwrap();
+    #[component]
+    fn Captured() -> impl IntoElement {
+        view()
+            .capture_keys(KeyCapture::keys([
+                Keystroke::parse_with("end", false).unwrap(),
+                Keystroke::parse_with("z", false).unwrap(),
+            ]))
+            .child(view())
+    }
+
+    let mut c = core();
+    c.mount_root(&crate::element::Root::of::<Captured>());
+    let batch = c.commit().unwrap();
+    let host = batch
+        .items
+        .iter()
+        .find_map(|item| match item {
+            MountItem::ViewProps { id, props }
+                if props.key_capture == KeyCapture::keys([end, z]) =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .expect("the capture rule mounts");
+
+    // The event's own physical code derives a different stroke (`1`, `w`);
+    // the adapter's stroke is authoritative and the payload is unchanged.
+    let mut numeric_end = KeyEvent::default();
+    numeric_end.key = "End".into();
+    numeric_end.physical = Some(PhysicalKey::Code("Numpad1".into()));
+    assert_eq!(
+        numeric_end.keystroke(Os::Web).map(|k| k.key),
+        Some(ShortcutKey::Char('1'))
+    );
+    assert!(c.key_captured(host, Some(&end)));
+
+    let mut azerty_z = KeyEvent::default();
+    azerty_z.key = "z".into();
+    azerty_z.physical = Some(PhysicalKey::Code("KeyW".into()));
+    assert_eq!(
+        azerty_z.keystroke(Os::Web).map(|k| k.key),
+        Some(ShortcutKey::Char('w'))
+    );
+    assert!(c.key_captured(host, Some(&z)));
+    let w = Keystroke::parse_with("w", false).unwrap();
+    assert!(!c.key_captured(host, Some(&w)));
+    // No shortcut names it: only `All` captures it.
+    assert!(!c.key_captured(host, None));
+}
+
+#[test]
+fn key_interest_walks_portaled_overlay_logical_ancestors() {
+    use crate::prelude::*;
+
+    #[component]
+    fn Portals() -> impl IntoElement {
+        let popup = || {
+            overlay().child(view().test_id("inside").focusable(true))
+        };
+        view()
+            .child(
+                view()
+                    .test_id("holder")
+                    .capture_keys(KeyCapture::All)
+                    .child(popup()),
+            )
+            .child(overlay().child(view().test_id("outside").focusable(true)))
+    }
+
+    let mut c = core();
+    c.mount_root(&crate::element::Root::of::<Portals>());
+    let batch = c.commit().unwrap();
+    let view = |wanted: &str| {
+        batch
+            .items
+            .iter()
+            .find_map(|item| match item {
+                MountItem::ViewProps { id, props } if props.test_id.as_deref() == Some(wanted) => {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{wanted} is mounted"))
+    };
+    // The overlay's content is not a DOM child of the capturing view, but
+    // it is its logical descendant in the core's tree.
+    assert!(c.key_interest(view("inside")));
+    assert!(!c.key_interest(view("outside")));
 }
 
 #[test]
