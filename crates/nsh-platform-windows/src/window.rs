@@ -13,8 +13,9 @@
 //! - Mouse, touch and pen input becomes [`crate::input::PointerEvent`]s
 //!   (with capture while a button is down, and double-click counting),
 //!   the wheel [`crate::input::WheelEvent`]s, keys
-//!   [`crate::input::KeyEvent`]s; characters and IME messages go to the
-//!   focused field ([`crate::text_input`]).
+//!   [`crate::input::KeyEvent`]s: the focused custom view hears them as
+//!   `KeyDown` / `KeyUp` ([`crate::keyboard`]); characters and IME
+//!   messages go to the focused field ([`crate::text_input`]).
 
 use std::{
     cell::{Cell, RefCell},
@@ -1261,11 +1262,16 @@ fn handle(
         }
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
             let down = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN);
+            // The message's scan code and extended bit are the physical key
+            // (`crate::keyboard` reports them); bit 30 says an auto-repeat.
+            let bits = lparam.0 as usize;
             let event = KeyEvent {
                 vk: wparam.0 as u16,
                 down,
-                repeat: down && (lparam.0 >> 30) & 1 == 1,
+                repeat: down && (bits >> 30) & 1 == 1,
                 modifiers: modifiers(),
+                scan: ((bits >> 16) & 0xFF) as u16,
+                extended: (bits >> 24) & 1 == 1,
             };
             let handled = crate::input::key(surface, event);
             if msg == WM_SYSKEYDOWN {
@@ -1991,6 +1997,120 @@ mod tests {
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    /// A message for `hwnd` of `kind` with `vk` and `scan`.
+    fn key_message(hwnd: HWND, kind: u32, vk: u16, scan: usize) -> MSG {
+        MSG {
+            hwnd,
+            message: kind,
+            wParam: WPARAM(vk as usize),
+            // Repeat count 1, the scan code, and the key going down.
+            lParam: LPARAM((1 | (scan << 16)) as isize),
+            ..Default::default()
+        }
+    }
+
+    /// Whether a `WM_CHAR` waits in `hwnd`'s queue.
+    fn char_queued(hwnd: HWND) -> bool {
+        let mut msg = MSG::default();
+        // SAFETY: a look at this thread's queue (no removal).
+        unsafe { PeekMessageW(&mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_NOREMOVE).as_bool() }
+    }
+
+    /// `TranslateMessage` and `DispatchMessage` for `msg`, as the message
+    /// loop does them; whether it made a character message.
+    fn translate_and_dispatch(msg: &MSG) -> bool {
+        // SAFETY: a message this test made for a window of this thread.
+        let translated = unsafe { TranslateMessage(msg).as_bool() };
+        // SAFETY: as above.
+        unsafe { DispatchMessageW(msg) };
+        translated
+    }
+
+    /// A capture consumes its key's character (`WM_CHAR`), and only its
+    /// own: the key after it still types, and a captured key that types
+    /// nothing leaves the next key's character alone.
+    #[test]
+    fn a_captured_key_removes_only_its_own_character() {
+        use nsh_core::{KeyCapture, MountItem, ROOT_ID, ViewKind};
+
+        let surface = Surface::new(Default::default());
+        surface.root.state_mut().frame = crate::geom::rect(0.0, 0.0, 200.0, 150.0);
+        let hwnd = create(&surface, "NSH key capture test", (200, 150), None, false).unwrap();
+        surface.mounter.borrow_mut().apply(
+            &surface,
+            &[
+                MountItem::Create {
+                    id: 2,
+                    kind: ViewKind::View,
+                },
+                MountItem::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+                MountItem::Frame {
+                    id: 2,
+                    frame: crate::geom::rect(0.0, 0.0, 100.0, 40.0),
+                },
+            ],
+        );
+        let view = surface.view(2).expect("the view");
+        let set_capture = |capture: KeyCapture| {
+            let mut props: nsh_core::ViewProps = view.state().props.clone();
+            props.focusable = Some(true);
+            props.key_capture = capture;
+            surface
+                .mounter
+                .borrow_mut()
+                .apply(&surface, &[MountItem::ViewProps { id: 2, props }]);
+        };
+        set_capture(KeyCapture::All);
+        assert!(crate::keyboard::focus_control(&surface, &view));
+        // The key's character is queued by TranslateMessage and removed by
+        // the capture before anything dispatches it.
+        let down = key_message(hwnd, WM_KEYDOWN, 0x41, 0x1E);
+        assert!(
+            translate_and_dispatch(&down),
+            "the key translates to a character"
+        );
+        assert!(!char_queued(hwnd), "a captured key types nothing");
+        // A key that types no character leaves nothing to suppress: remove
+        // the capture and the next key types as usual.
+        set_capture(KeyCapture::None);
+        let down = key_message(hwnd, WM_KEYDOWN, 0x42, 0x30);
+        assert!(
+            translate_and_dispatch(&down),
+            "the key translates to a character"
+        );
+        assert!(char_queued(hwnd), "the next key's character is untouched");
+        // Drain it, so the test leaves no character behind.
+        let mut msg = MSG::default();
+        // SAFETY: a removal from this thread's queue.
+        unsafe {
+            let _ = PeekMessageW(&mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE);
+        }
+        // A captured key with no character (an arrow) suppresses nothing,
+        // even before a key that types.
+        set_capture(KeyCapture::All);
+        let _ = translate_and_dispatch(&key_message(hwnd, WM_KEYDOWN, 0x25, 0x4B));
+        set_capture(KeyCapture::None);
+        assert!(
+            translate_and_dispatch(&key_message(hwnd, WM_KEYDOWN, 0x43, 0x2E)),
+            "the key translates to a character"
+        );
+        assert!(
+            char_queued(hwnd),
+            "a captured key that types nothing suppresses nothing"
+        );
+        let mut msg = MSG::default();
+        // SAFETY: a removal from this thread's queue, then the test's own
+        // window.
+        unsafe {
+            let _ = PeekMessageW(&mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE);
+            DestroyWindow(hwnd).unwrap();
         }
     }
 

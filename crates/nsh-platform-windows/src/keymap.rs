@@ -71,17 +71,11 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     found.consumed()
 }
 
-/// Removes the character `TranslateMessage` queued for the consumed key:
+/// Removes the characters `TranslateMessage` queued for the consumed key:
 /// in the window that has the keyboard (the main one or a window of the
 /// app's own; every window's keys go through the app's keymap).
 fn drop_char(surface: &Surface) {
-    // SAFETY: a plain query of this thread's focus.
-    let focus = unsafe { GetFocus() };
-    let hwnd = if focus.is_invalid() {
-        surface.hwnd()
-    } else {
-        focus
-    };
+    let hwnd = keyboard_window(surface);
     let mut msg = MSG::default();
     for kind in [WM_CHAR, WM_SYSCHAR] {
         // SAFETY: a plain call with a local out value, for a window of
@@ -89,6 +83,38 @@ fn drop_char(surface: &Surface) {
         unsafe {
             let _ = PeekMessageW(&mut msg, Some(hwnd), kind, kind, PM_REMOVE);
         }
+    }
+}
+
+/// Removes up to `count` `WM_CHAR` messages queued for a captured key
+/// ([`crate::keyboard`]): the characters that key would have typed (a
+/// supplementary character is two UTF-16 units). A key that types nothing
+/// removes nothing, and nothing is remembered for the next key.
+pub(crate) fn drop_chars(surface: &Surface, count: usize) {
+    if count == 0 {
+        return;
+    }
+    let hwnd = keyboard_window(surface);
+    let mut msg = MSG::default();
+    for _ in 0..count {
+        // SAFETY: a plain call with a local out value, for a window of
+        // this thread.
+        let found = unsafe { PeekMessageW(&mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE) };
+        if !found.as_bool() {
+            return;
+        }
+    }
+}
+
+/// The window whose queue `TranslateMessage` queued the character in: the
+/// window that has the keyboard, else the surface's.
+fn keyboard_window(surface: &Surface) -> windows::Win32::Foundation::HWND {
+    // SAFETY: a plain query of this thread's focus.
+    let focus = unsafe { GetFocus() };
+    if focus.is_invalid() {
+        surface.hwnd()
+    } else {
+        focus
     }
 }
 

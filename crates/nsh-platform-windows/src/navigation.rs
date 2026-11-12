@@ -148,14 +148,16 @@ fn is_shown(view: &NshView) -> bool {
     }
 }
 
-/// Takes the keyboard focus away from a field inside `view` before it is
-/// concealed or removed: typing must not go to a field nobody sees.
+/// Takes the keyboard focus away from a field (or a custom view, which
+/// reports its blur) inside `view` before it is concealed or removed:
+/// typing must not go to a view nobody sees.
 fn drop_focus(surface: &Surface, view: &NshView) {
     if let Some(field) = crate::text_input::focused(surface)
         && is_ancestor(view, &field)
     {
         crate::text_input::blur(&field);
     }
+    crate::keyboard::blur_within(surface, view);
 }
 
 /// Conceals `view` (or shows it again).
@@ -1583,6 +1585,10 @@ pub(crate) fn present(surface: &Rc<Surface>, view: &NshView) {
     if let Some(field) = &field {
         crate::text_input::blur(field);
     }
+    // A custom view behind the modal would hear keys nobody sees it get
+    // (the modal's own stops take the focus as Tab reaches them). Another
+    // window keeps its own focus.
+    crate::keyboard::blur_window(surface, crate::app_window::window_of(surface, view));
     m.restore = field;
     m.view = Some(view.clone());
     m.closed = false;
