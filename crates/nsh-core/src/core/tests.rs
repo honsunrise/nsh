@@ -25167,7 +25167,11 @@ fn key_interest_walks_portaled_overlay_logical_ancestors() {
 
     #[component]
     fn Portals() -> impl IntoElement {
-        let popup = || overlay().child(view().test_id("inside").focusable(true));
+        let popup = || {
+            overlay()
+                .test_id("capturing-portal")
+                .child(view().test_id("inside").focusable(true))
+        };
         view()
             .child(
                 view()
@@ -25179,9 +25183,17 @@ fn key_interest_walks_portaled_overlay_logical_ancestors() {
                 view()
                     .test_id("listener")
                     .on_key_down(|_: &KeyEvent| {})
-                    .child(overlay().child(view().test_id("heard").focusable(true))),
+                    .child(
+                        overlay()
+                            .test_id("listening-portal")
+                            .child(view().test_id("heard").focusable(true)),
+                    ),
             )
-            .child(overlay().child(view().test_id("outside").focusable(true)))
+            .child(
+                overlay()
+                    .test_id("unrelated-portal")
+                    .child(view().test_id("outside").focusable(true)),
+            )
     }
 
     let mut c = core();
@@ -25219,18 +25231,23 @@ fn key_interest_walks_portaled_overlay_logical_ancestors() {
     assert!(path.contains(&holder), "{path:?}");
     // The overlays whose logical ancestry has key interest carry the
     // routing override; the unrelated one carries none.
-    let overrides: Vec<_> = batch
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            MountItem::ViewProps { props, .. } if props.key_parent.is_some() => props.key_parent,
-            _ => None,
-        })
-        .collect();
-    assert_eq!(overrides.len(), 2, "{overrides:?}");
-    assert!(overrides.contains(&holder));
-    assert!(overrides.contains(&view("listener")));
-    assert!(!overrides.contains(&outside));
+    let routed_parent = |name| {
+        let id = view(name);
+        batch
+            .items
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                MountItem::ViewProps { id: target, props } if *target == id => {
+                    Some(props.key_parent)
+                }
+                _ => None,
+            })
+            .expect("the portal's final native props")
+    };
+    assert_eq!(routed_parent("capturing-portal"), Some(holder));
+    assert_eq!(routed_parent("listening-portal"), Some(view("listener")));
+    assert_eq!(routed_parent("unrelated-portal"), None);
 }
 
 #[test]
