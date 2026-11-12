@@ -716,13 +716,17 @@ browsers' touches into what phones report:
   `captureKeys` policy (`nsh_key_event`, Rust's `KeyEvent` and `KeyCapture`): the event carries the browser's own
   `KeyboardEvent.key` as its logical key (its actual case and layout, never forced onto a US layout) and
   `KeyboardEvent.code` as its physical key, the text the key types on a press (nothing for a release, a composing
-  key, or a Control/Alt/Command combination) and the modifiers, repeat and captured flags. The core matches the
-  mounted `captureKeys` rules against the existing shortcut keystroke the key's `code` names (the `keymap`
-  vocabulary, never the raw logical string), reads the mounted rules of the focused view and its enabled ancestors
-  up to its window root, before any browser default,
+  key, or a Control/Alt/Command combination) and the modifiers, repeat and captured flags. Capture matches the
+  page's existing canonical shortcut key — the same `keyCode(e)` `nsh_key` uses: the character the layout reports
+  without modifiers, else the US character of its `code` — never the raw logical string or a character guessed
+  from the physical code, so named End and an unmodified AZERTY `z` match what the page reported. The core first
+  answers whether the focused view's logical ancestry (an overlay's content included, whatever its DOM ancestry)
+  hears raw keys or captures any (`nsh_key_interest`); only then does the page build the event. The core reads the
+  mounted rules of the focused view and its enabled ancestors up to its window root, before any browser default,
   and routes ONE event through its common bubbling to that view and its ancestors — for both the press and its
   release, with `captured` computed anew for each. A captured key produces no text or browser default (Tab moves
-  no focus, Space scrolls nothing, Escape goes nowhere); an uncaptured one only notifies. A view with no raw
+  no focus, Space scrolls nothing, Escape goes nowhere) and a captured release cancels what an uncaptured press
+  armed (no `onPress`; pressed states clear); an uncaptured one only notifies. A view with no raw
   listener and no capture in its ancestry takes the fast path, and native fields, contenteditable elements, hosted
   pages, videos and a key an input method is composing keep their own keys. Then: an open dialog (Escape presses its
   cancel button); a focused field (Escape leaves it); a custom context menu (Shift+F10 or the Menu key);
@@ -733,6 +737,9 @@ browsers' touches into what phones report:
   Context-menu keys are handled explicitly because Chromium on macOS does not emit `contextmenu` for them.
   A handled key prevents the browser default to avoid duplicate openings; native fields and selectable text
   retain their own menus, and keyboard requests carry no pointer and use the trigger's bottom-start corner.
+  `examples/keyboard-capture` is a scenario app for this (`nsh run --target web examples/keyboard-capture`):
+  Tab to its button, hold Space, press Shift and release Space — the release is captured, so no press runs and the
+  count stays; a plain Space counts once, and the log shows each transition's raw key, text, code and modifiers.
 - **Focus**: the stops `ViewProps::focus_stop` decides are focusable (`tabindex=0`; `updateFocusable`): pressables
   (role `button` unless they have one) unless `focusable={false}`, and `focusable={true}` views whether or not they take
   presses (Return and Space press only pressables), never disabled or hidden ones (a focused one that stops being a

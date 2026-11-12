@@ -1516,18 +1516,23 @@ pub extern "C" fn nsh_key_command(id: u32) -> f64 {
 }
 
 /// A key transition the browser reported on view `id` (`down`: a press, not
-/// a release): the raw logical key `KeyboardEvent.key` names (`"A"`, `"é"`,
-/// `"ArrowLeft"`), the text it types on this press (`text_len` 0 for none)
-/// and its physical `KeyboardEvent.code` (`physical_len` 0 for none), with
-/// `modifiers` bits 1 Ctrl, 2 Alt, 4 Shift, 8 Meta and `repeat` for an
+/// a release): its canonical shortcut key [`key_of`] takes from
+/// `stroke` (the page's `keyCode`; all ones for none) for matching
+/// `captureKeys`, the raw logical key `KeyboardEvent.key` names (`"A"`,
+/// `"é"`, `"ArrowLeft"`), the text it types on this press (`text_len` 0 for
+/// none) and its physical `KeyboardEvent.code` (`physical_len` 0 for none),
+/// with `modifiers` bits 1 Ctrl, 2 Alt, 4 Shift, 8 Meta and `repeat` for an
 /// auto-repeat.
 ///
 /// The core builds the event, decides from the mounted `captureKeys` rules
 /// of `id` and its enabled ancestors whether the transition is captured
 /// (then no browser default follows), and routes the one event to the view
-/// and its ancestors. Returns the pump delay, as every entry into the
-/// engine does; [`nsh_key_captured`] answers whether the key was captured
-/// (`nsh.js` then prevents the browser's default).
+/// and its ancestors. The capture stroke is the canonical shortcut one, so
+/// a named key (End) or a layout's own character (AZERTY `z`) matches by
+/// what the page reports, never by the physical code's US character.
+/// Returns the pump delay, as every entry into the engine does;
+/// [`nsh_key_captured`] answers whether the key was captured (`nsh.js` then
+/// prevents the browser's default).
 ///
 /// # Safety
 ///
@@ -1537,6 +1542,7 @@ pub extern "C" fn nsh_key_command(id: u32) -> f64 {
 pub unsafe extern "C" fn nsh_key_event(
     id: u32,
     down: u32,
+    stroke: u32,
     key: *const u8,
     key_len: usize,
     text: *const u8,
@@ -1552,17 +1558,19 @@ pub unsafe extern "C" fn nsh_key_event(
     let text = unsafe { string(text, text_len) };
     // SAFETY: guaranteed by the caller.
     let physical = unsafe { string(physical, physical_len) };
-    let mut event = nsh_core::keyboard::KeyEvent::default();
-    event.key = nsh_core::element::SharedString::from(key);
-    event.text = (!text.is_empty()).then(|| nsh_core::element::SharedString::from(text));
-    event.physical = (!physical.is_empty())
-        .then(|| nsh_core::keyboard::PhysicalKey::Code(physical.into()));
-    event.modifiers = Modifiers {
+    let modifiers = Modifiers {
         ctrl: modifiers & 1 != 0,
         alt: modifiers & 2 != 0,
         shift: modifiers & 4 != 0,
         cmd: modifiers & 8 != 0,
     };
+    let stroke = key_of(stroke).map(|key| Keystroke { key, modifiers });
+    let mut event = nsh_core::keyboard::KeyEvent::default();
+    event.key = nsh_core::element::SharedString::from(key);
+    event.text = (!text.is_empty()).then(|| nsh_core::element::SharedString::from(text));
+    event.physical = (!physical.is_empty())
+        .then(|| nsh_core::keyboard::PhysicalKey::Code(physical.into()));
+    event.modifiers = modifiers;
     event.repeat = repeat != 0;
     let kind = if down != 0 {
         EventKind::KeyDown
@@ -1570,7 +1578,11 @@ pub unsafe extern "C" fn nsh_key_event(
         EventKind::KeyUp
     };
     let mut captured = false;
-    let delay = send(|app| captured = app.engine.key_event(id, kind, EventPayload::Key(event)));
+    let delay = send(|app| {
+        captured = app
+            .engine
+            .key_event(id, kind, EventPayload::Key(event), stroke)
+    });
     KEY_CAPTURED.with(|c| c.set(captured));
     delay
 }
@@ -1587,6 +1599,21 @@ thread_local! {
 #[unsafe(no_mangle)]
 pub extern "C" fn nsh_key_captured() -> f64 {
     KEY_CAPTURED.with(|c| c.get()) as u8 as f64
+}
+
+/// Whether view `id` or an enabled logical ancestor of it (an overlay's
+/// content included, whatever its DOM ancestry) hears raw key transitions
+/// or mounts a `captureKeys` rule, from the core's own tree: 1 when it does,
+/// 0 when nothing there needs a [`nsh_key_event`]. No allocation, and no
+/// event is built for a view nothing listens to.
+#[unsafe(no_mangle)]
+pub extern "C" fn nsh_key_interest(id: u32) -> f64 {
+    APP.with(|a| {
+        a.try_borrow()
+            .ok()
+            .and_then(|app| app.as_ref().map(|app| app.engine.key_interest(id)))
+            .unwrap_or(false) as u8 as f64
+    })
 }
 
 /// A scroll view's offset changed (`applied`: the scrolls the core asked
