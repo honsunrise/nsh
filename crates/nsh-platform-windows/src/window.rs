@@ -927,6 +927,9 @@ fn key_event(msg: u32, wparam: WPARAM, lparam: LPARAM) -> KeyEvent {
         scan: ((bits >> 16) & 0xFF) as u16,
         extended: (bits >> 24) & 1 == 1,
         sys: matches!(msg, WM_SYSKEYDOWN | WM_SYSKEYUP | WM_NSH_SYSKEYDOWN),
+        // A `WM_KEY*` message from the queue went through the caller's
+        // `TranslateMessage`; its private, captured form did not.
+        translated: matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP),
     }
 }
 
@@ -2406,6 +2409,98 @@ mod tests {
         assert!(
             !char_queued(hwnd),
             "neither captured key made a character"
+        );
+        // SAFETY: the test's own window.
+        unsafe { DestroyWindow(hwnd).unwrap() };
+    }
+
+    /// A private, untranslated captured key down consumed by an app
+    /// binding never scavenges a character it did not make: one posted
+    /// after translation would have run and before the dispatch stays.
+    #[test]
+    fn a_binding_consuming_an_untranslated_key_keeps_an_unrelated_character() {
+        use nsh_core::{
+            KeyCapture, MountItem, ROOT_ID, ViewKind,
+            keymap::{KeyBinding, Keymap, Keystroke, When},
+        };
+
+        let surface = Surface::new(Default::default());
+        surface.root.state_mut().frame = crate::geom::rect(0.0, 0.0, 200.0, 150.0);
+        let hwnd = create(&surface, "NSH key capture binding test", (200, 150), None, false).unwrap();
+        surface.mounter.borrow_mut().apply(
+            &surface,
+            &[
+                MountItem::Create {
+                    id: 2,
+                    kind: ViewKind::View,
+                },
+                MountItem::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+                MountItem::Frame {
+                    id: 2,
+                    frame: crate::geom::rect(0.0, 0.0, 100.0, 40.0),
+                },
+            ],
+        );
+        let view = surface.view(2).expect("the view");
+        let set_capture = |capture: KeyCapture| {
+            let mut props: nsh_core::ViewProps = view.state().props.clone();
+            props.focusable = Some(true);
+            props.key_capture = capture;
+            surface
+                .mounter
+                .borrow_mut()
+                .apply(&surface, &[MountItem::ViewProps { id: 2, props }]);
+        };
+        set_capture(KeyCapture::All);
+        assert!(crate::keyboard::focus_control(&surface, &view));
+        // A consuming binding of the same key, as an app's keymap has.
+        let binding = KeyBinding::new(
+            1,
+            Keystroke::parse_with("a", false).expect("a stroke"),
+            When::Always,
+            false,
+        );
+        surface.mounter.borrow_mut().apply(
+            &surface,
+            &[MountItem::Keymap(std::sync::Arc::new(Keymap::new(vec![
+                binding,
+            ])))],
+        );
+        drain_messages(hwnd);
+        post_key(hwnd, 0x41, 0x1E);
+        let down = next_message(hwnd).expect("the key down");
+        assert_eq!(down.message, WM_NSH_KEYDOWN, "the capture took its text");
+        // The capture rule is gone before dispatch: the app's binding takes
+        // the (still untranslated) key, and a character posted after the
+        // translation would have run is not its.
+        set_capture(KeyCapture::None);
+        // SAFETY: posting to a window of this thread.
+        unsafe {
+            PostMessageW(
+                Some(hwnd),
+                WM_CHAR,
+                WPARAM('x' as usize),
+                LPARAM(0),
+            )
+            .unwrap();
+        }
+        assert!(
+            !translate_and_dispatch(&down),
+            "a private key down is not translated"
+        );
+        // The binding consumed the key (no fallback translation made it
+        // type), and the unrelated character is still there, first.
+        let character = next_message(hwnd).expect("the unrelated character");
+        assert_eq!(character.message, WM_CHAR);
+        assert_eq!(character.wParam.0, 'x' as usize);
+        let _ = translate_and_dispatch(&character);
+        assert!(
+            !char_queued(hwnd),
+            "the consumed key made no character, and none was taken"
         );
         // SAFETY: the test's own window.
         unsafe { DestroyWindow(hwnd).unwrap() };

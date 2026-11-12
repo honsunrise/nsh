@@ -750,6 +750,7 @@ pub(crate) fn suppress_translation(msg: &mut MSG) -> bool {
         scan: ((bits >> 16) & 0xFF) as u16,
         extended: (bits >> 24) & 1 == 1,
         sys,
+        translated: false,
     };
     let window = crate::window::app_window_root(msg.hwnd).unwrap_or(nsh_core::ROOT_ID);
     if !captured_now(&surface, window, &event) {
@@ -836,6 +837,7 @@ mod tests {
             scan: 0,
             extended: false,
             sys: false,
+            translated: false,
         }
     }
 

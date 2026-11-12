@@ -220,6 +220,13 @@ pub(crate) struct KeyEvent {
     /// It came as `WM_SYSKEYDOWN` / `WM_SYSKEYUP`: an Alt combination,
     /// whose `TranslateMessage` character is a `WM_SYSCHAR`.
     pub(crate) sys: bool,
+    /// `TranslateMessage` ran for the message and may have queued its
+    /// character (`WM_CHAR` / `WM_SYSCHAR`): only then may a consuming
+    /// shortcut remove the characters it made. False for an untranslated
+    /// private message ([`crate::window::WM_NSH_KEYDOWN`] /
+    /// [`crate::window::WM_NSH_SYSKEYDOWN`]) and for input synthesized
+    /// inside the backend, which queued nothing.
+    pub(crate) translated: bool,
 }
 
 /// The mouse cursor.
