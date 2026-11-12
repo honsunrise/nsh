@@ -1,4 +1,4 @@
-use nsh_core::prelude::*;
+use nsh_core::{keymap::Keystroke, platform::Os, prelude::*};
 use nsh_platform_tui::{App, Handled, Input, Modifiers, Root};
 use ratatui_core::{backend::TestBackend, terminal::Terminal};
 
@@ -1235,5 +1235,233 @@ fn tab_reaches_a_texts_links_in_order_shows_the_focused_one_and_return_presses_i
         &mut terminal,
         &rx,
         "Pressed: https://example.com/guide #notes #notes",
+    );
+}
+
+/// What a raw key transition reported, as the test reads it: the logical
+/// key's name, its text preview, and whether the event says Shift, a
+/// repeat, a capture, and that the terminal has no physical code.
+fn raw_event(event: &KeyEvent) -> String {
+    format!(
+        "{} {} shift {} repeat {} captured {} physical {}",
+        event.key.as_str(),
+        event.text.as_deref().unwrap_or("-"),
+        event.modifiers.shift,
+        event.repeat,
+        event.captured,
+        event.physical.is_none(),
+    )
+}
+
+#[component]
+fn RawKeyPage() -> impl IntoElement {
+    let down = signal(String::from("none"));
+    let up = signal(String::from("none"));
+    view()
+        .flex_1()
+        .child(
+            view()
+                .h(px(16.0))
+                .focusable(true)
+                .on_press(|_: &()| {})
+                .on_key_down(move |event: &KeyEvent| down.set(raw_event(event)))
+                .on_key_up(move |event: &KeyEvent| up.set(raw_event(event)))
+                .child(text("pad")),
+        )
+        .child(text(move || format!("down {}", down.get())))
+        .child(text(move || format!("up {}", up.get())))
+}
+
+#[test]
+fn raw_key_events_report_the_terminal_events_and_never_ignore_a_release() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+    view.load(App::Rust(Root::new::<RawKeyPage>(|| ())))
+        .unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "down none");
+    view.handle(key("Tab", Default::default()));
+    // A press: its character, and neither a repeat nor a release.
+    view.handle(key("a", Default::default()));
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "down a a shift false repeat false captured false physical true",
+    );
+    // The keymap knows the arrow as `Left`: the raw event names it as the
+    // DOM and the other platforms do, and it types nothing.
+    view.handle(key("Left", Default::default()));
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "down ArrowLeft - shift false repeat false captured false physical true",
+    );
+    // The terminal's repeat (kitty) is the same key marked a repeat.
+    view.handle(Input::KeyRepeat {
+        key: "a".into(),
+        modifiers: Default::default(),
+    });
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "down a a shift false repeat true captured false physical true",
+    );
+    // A release is a transition of its own, not dropped: no text, and the
+    // reported modifiers stay as they are.
+    assert_eq!(
+        view.handle(Input::Key {
+            key: "a".into(),
+            modifiers: Default::default(),
+            release: true,
+        }),
+        Handled::Ignored
+    );
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "up a - shift false repeat false captured false physical true",
+    );
+    // A character is the terminal's: Shift+A reports `A`, with Shift, and a
+    // key no shortcut names still reaches the view (a modifier's).
+    view.handle(key(
+        "A",
+        Modifiers {
+            shift: true,
+            ..Default::default()
+        },
+    ));
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "down A A shift true repeat false captured false physical true",
+    );
+    view.handle(key("Shift", Default::default()));
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "down Shift - shift false repeat false captured false physical true",
+    );
+}
+
+#[component]
+fn CapturedTabPage() -> impl IntoElement {
+    let first = signal(false);
+    let second = signal(false);
+    let heard = signal(String::from("none"));
+    view()
+        .flex_1()
+        .capture_keys(KeyCapture::keys([Keystroke::parse("tab", Os::Linux).unwrap()]))
+        .on_key_down(move |event: &KeyEvent| {
+            heard.set(format!("{} {}", event.key.as_str(), event.captured))
+        })
+        .child(
+            view()
+                .h(px(16.0))
+                .focusable(true)
+                .on_press(|_: &()| {})
+                .on_focus(move |_: &()| first.set(true))
+                .child(text("first")),
+        )
+        .child(
+            view()
+                .h(px(16.0))
+                .focusable(true)
+                .on_press(|_: &()| {})
+                .on_focus(move |_: &()| second.set(true))
+                .child(text("second")),
+        )
+        .child(text(move || {
+            format!("focused {} {} heard {}", first.get(), second.get(), heard.get())
+        }))
+}
+
+#[test]
+fn a_captured_tab_moves_no_focus_and_marks_the_key_and_its_release() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+    view.load(App::Rust(Root::new::<CapturedTabPage>(|| ())))
+        .unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "focused false false");
+    // Ctrl+N takes the first stop's focus; no view had it before, so the
+    // key was no view's to hear.
+    view.handle(ctrl("n"));
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "focused true false heard none",
+    );
+    // A key the rule does not name is heard unmarked, and does nothing.
+    view.handle(key("q", Default::default()));
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "focused true false heard q false",
+    );
+    // Tab is the ancestor's: the view hears it marked captured, and the
+    // terminal's traversal is not run.
+    assert_eq!(view.handle(key("Tab", Default::default())), Handled::Yes);
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "focused true false heard Tab true",
+    );
+    // The release carries its own decision: captured, no default, and it
+    // still reaches the view.
+    assert_eq!(
+        view.handle(Input::Key {
+            key: "Tab".into(),
+            modifiers: Default::default(),
+            release: true,
+        }),
+        Handled::Yes
+    );
+}
+
+#[component]
+fn FieldUnderCapture() -> impl IntoElement {
+    let armed = signal(false);
+    let heard = signal(String::from("none none"));
+    view()
+        .flex_1()
+        .when(armed.get(), |page| page.capture_keys(KeyCapture::All))
+        .on_key_down(move |event: &KeyEvent| {
+            heard.set(format!("{} {}", event.key.as_str(), event.captured))
+        })
+        .child(
+            nsh_base::input()
+                .h(px(32.0))
+                .on_focus(move |_: &()| armed.set(true)),
+        )
+        .child(text(move || format!("heard {}", heard.get())))
+        .child(text(move || format!("armed {}", armed.get())))
+}
+
+#[test]
+fn a_text_field_keeps_its_keys_even_under_a_capture_of_every_key() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
+    view.load(App::Rust(Root::new::<FieldUnderCapture>(|| ())))
+        .unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "armed false");
+    // The field takes the focus while no capture is mounted; its focus
+    // mounts the rule over it.
+    view.handle(ctrl("n"));
+    draw_until(&mut view, &mut terminal, &rx, "armed true");
+    // The rule covers the field now: typing still edits it, and the views
+    // around it hear no part of the edit.
+    assert_eq!(view.handle(key("a", Default::default())), Handled::Yes);
+    draw_until(&mut view, &mut terminal, &rx, "armed true");
+    assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "a");
+    assert!(
+        super::dock::dump(&terminal).contains("heard none none"),
+        "the capture did not intercept the field's key"
     );
 }
