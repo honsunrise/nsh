@@ -696,6 +696,8 @@ mod tests {
             down: true,
             repeat: false,
             modifiers,
+            scan: 0,
+            extended: false,
         }
     }
 
