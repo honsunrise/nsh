@@ -1421,11 +1421,26 @@ pub(crate) fn hears_keys(surface: &Surface) -> bool {
     if crate::window::root_of(surface, &view) != window {
         return false;
     }
-    hears_chain(Some(view))
+    hears_chain(surface, Some(view))
 }
 
-/// Whether `view` or an enabled ancestor hears raw keys or captures them.
-fn hears_chain(mut current: Option<NshView>) -> bool {
+/// The view a keyboard interest or capture walk goes to from `view`: the
+/// logical parent the core points it at ([`nsh_core::ViewProps::key_parent`]:
+/// an overlay's content is mounted in a portal host, at the root, while it
+/// is logically inside the view that opened it), else the mounted parent.
+/// A `key_parent` naming no mounted view ends the walk: the logical
+/// ancestor is gone, and the mounted parent is not where its keys go.
+fn key_parent(surface: &Surface, view: &NshView) -> Option<NshView> {
+    let logical = view.state().props.key_parent;
+    match logical {
+        Some(id) => surface.view(id),
+        None => view.parent_view(),
+    }
+}
+
+/// Whether `view` or an enabled ancestor hears raw keys or captures them,
+/// by the logical tree (`key_parent`).
+fn hears_chain(surface: &Surface, mut current: Option<NshView>) -> bool {
     while let Some(view) = current {
         {
             let state = view.state();
@@ -1436,7 +1451,7 @@ fn hears_chain(mut current: Option<NshView>) -> bool {
                 return true;
             }
         }
-        current = view.parent_view();
+        current = key_parent(surface, &view);
     }
     false
 }
@@ -1456,7 +1471,7 @@ pub(crate) fn notify_raw(surface: &Surface, raw: &crate::keys::RawKey) -> bool {
     }
     // A keymap alone may have needed the raw key (its stroke): a view that
     // neither listens nor captures hears no notification.
-    if !hears_chain(Some(view.clone())) {
+    if !hears_chain(surface, Some(view.clone())) {
         return false;
     }
     let mut event = raw.event(false);
@@ -1464,7 +1479,7 @@ pub(crate) fn notify_raw(surface: &Surface, raw: &crate::keys::RawKey) -> bool {
     // (`Core::key_captured`), from the source's own key for a key with no
     // virtual code; an engine on its own thread cannot answer it before
     // the platform's default, so the mounted rules are read here.
-    let captured = captures(&view, raw.stroke());
+    let captured = captures(surface, &view, raw.stroke());
     event.captured = captured;
     let kind = if raw.down {
         EventKind::KeyDown
@@ -1476,9 +1491,13 @@ pub(crate) fn notify_raw(surface: &Surface, raw: &crate::keys::RawKey) -> bool {
 }
 
 /// Whether the focused `view` or an enabled ancestor captures the key of
-/// canonical shortcut `stroke` (`capture_keys`): a captured key notifies
-/// and runs no native default.
-fn captures(view: &NshView, stroke: Option<&nsh_core::keymap::Keystroke>) -> bool {
+/// canonical shortcut `stroke` (`capture_keys`), by the logical tree
+/// (`key_parent`): a captured key notifies and runs no native default.
+fn captures(
+    surface: &Surface,
+    view: &NshView,
+    stroke: Option<&nsh_core::keymap::Keystroke>,
+) -> bool {
     let mut current = Some(view.clone());
     while let Some(view) = current {
         {
@@ -1489,7 +1508,7 @@ fn captures(view: &NshView, stroke: Option<&nsh_core::keymap::Keystroke>) -> boo
                 return true;
             }
         }
-        current = view.parent_view();
+        current = key_parent(surface, &view);
     }
     false
 }
@@ -3844,6 +3863,8 @@ mod tests {
         let outer = view(&root, 2, ViewKind::View, rect(0.0, 0.0, 300.0, 300.0));
         let inner = view(&outer, 4, ViewKind::View, rect(0.0, 0.0, 100.0, 100.0));
         let sibling = view(&root, 6, ViewKind::View, rect(0.0, 300.0, 100.0, 100.0));
+        // Ordinary views: the walk follows the mounted parents.
+        let surface = Surface::new(nsh_engine::Environment::default());
         let shift_a = || {
             let mut stroke = stroke_of("a", Some("A"));
             stroke.modifiers.shift = true;
@@ -3853,7 +3874,7 @@ mod tests {
         // modifiers, as `keys::RawKey` derives it.
         let captured = |view: &NshView, k: &gpui::Keystroke| {
             let raw = crate::keys::RawKey::down(k, false);
-            captures(view, raw.stroke())
+            captures(&surface, view, raw.stroke())
         };
 
         // A rule over the focused view captures the keys it names, as the
@@ -3891,6 +3912,93 @@ mod tests {
         // The focus' own rule is looked at first, then its ancestors'.
         inner.state_mut().props.key_capture = nsh_core::KeyCapture::None;
         assert!(captured(&inner, &stroke_of("é", Some("é"))));
+    }
+
+    /// Core mounts an overlay's content in a portal host at the root while
+    /// its logical parent stays where it was opened
+    /// (`ViewProps::key_parent`). Keyboard interest and capture follow that
+    /// logical tree: the content is captured by an ancestor that is not its
+    /// mounted parent, and a sibling portal captures nothing of another's
+    /// ancestors.
+    #[test]
+    fn a_portaled_overlays_keys_follow_its_logical_ancestors() {
+        use nsh_core::MountItem;
+
+        let surface = Surface::new(nsh_engine::Environment::default());
+        surface.root.set_invalidate(Rc::new(|| {}));
+        surface.root.state_mut().frame = rect(0.0, 0.0, 400.0, 400.0);
+        // 1: the logical ancestor; 2: the portal host at the root; 3: the
+        // overlay's content, mounted in 2 and logically inside 1; 4: a
+        // sibling portal's content in 2, logically inside 5, which has no
+        // keys.
+        let tree: [(NodeId, NodeId); 5] =
+            [(1, ROOT_ID), (2, ROOT_ID), (3, 2), (4, 2), (5, ROOT_ID)];
+        for &(id, parent) in &tree {
+            let mut mounter = surface.mounter.borrow_mut();
+            mounter.apply(&surface, &MountItem::Create { id, kind: ViewKind::View });
+            mounter.apply(
+                &surface,
+                &MountItem::Insert {
+                    parent,
+                    child: id,
+                    before: None,
+                },
+            );
+        }
+        surface.mounter.borrow_mut().end_batch(&surface);
+        let ancestor = surface.view(1).unwrap();
+        let host = surface.view(2).unwrap();
+        let content = surface.view(3).unwrap();
+        let sibling = surface.view(4).unwrap();
+        // The core's Insert parent is the portal host, not the logical one.
+        assert_eq!(content.parent_view(), Some(host.clone()));
+        {
+            let mut state = content.state_mut();
+            state.props.focusable = Some(true);
+            state.props.key_parent = Some(1);
+        }
+        {
+            let mut state = sibling.state_mut();
+            state.props.focusable = Some(true);
+            state.props.key_parent = Some(5);
+        }
+        let raw = || crate::keys::RawKey::down(&stroke_of("?", Some("?")), false);
+        // The source's payload is untouched, its matching stroke is the
+        // keymap's.
+        assert_eq!(raw().event(false).key, "?");
+        assert!(!raw().event(false).modifiers.shift);
+        assert_eq!(
+            raw().stroke().map(|stroke| stroke.key),
+            Some(nsh_core::keymap::Key::Char('/'))
+        );
+        // The logical ancestor captures every key; the content itself has
+        // no rule and no listener.
+        ancestor.state_mut().props.key_capture = nsh_core::KeyCapture::All;
+        crate::key_focus::focus(&surface, &content);
+        assert_eq!(crate::key_focus::focused(&surface), Some(content.clone()));
+        assert!(hears_keys(&surface));
+        assert!(captures(&surface, &content, raw().stroke()));
+        assert!(press(&surface, 0, true, raw()));
+        // The sibling portal's focus finds none of the other's ancestors.
+        crate::key_focus::focus(&surface, &sibling);
+        assert_eq!(crate::key_focus::focused(&surface), Some(sibling.clone()));
+        assert!(!hears_keys(&surface));
+        assert!(!captures(&surface, &sibling, raw().stroke()));
+        // Interest alone, through the logical ancestor, for both
+        // transitions; it captures nothing.
+        crate::key_focus::focus(&surface, &content);
+        ancestor.state_mut().props.key_capture = nsh_core::KeyCapture::None;
+        ancestor.state_mut().events.set(EventKind::KeyDown, true);
+        assert!(hears_keys(&surface));
+        assert!(!captures(&surface, &content, raw().stroke()));
+        ancestor.state_mut().events.set(EventKind::KeyDown, false);
+        ancestor.state_mut().events.set(EventKind::KeyUp, true);
+        assert!(hears_keys(&surface));
+        // A `key_parent` naming no mounted view ends the walk: the mounted
+        // portal host is not where the content's keys go.
+        content.state_mut().props.key_parent = Some(99);
+        assert!(!hears_keys(&surface));
+        assert!(!captures(&surface, &content, raw().stroke()));
     }
 
     #[test]
