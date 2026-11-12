@@ -102,9 +102,19 @@ pub(crate) fn captures(tree: &Mounter, id: NodeId, stroke: Option<&Keystroke>) -
 /// its ancestors up to the sheet it is in, nearest first. A terminal has one
 /// window: a sheet (or other `Modal`) is the keyboard boundary its keys stay
 /// in, as a window is on the desktops.
+///
+/// A portaled view (an `Overlay`) is mounted in a root view, but its
+/// logical parent is where the app declared it: `ViewProps::key_parent`
+/// names that, and interest and capture follow it rather than the mount
+/// parent. The override is read through the mounter's view map, so a
+/// logical parent is walked like any other.
 struct Ancestors<'a> {
     tree: &'a Mounter,
     next: Option<NodeId>,
+    /// A logical-parent override may point anywhere; a malformed cycle
+    /// must not hang input. Every sound chain visits each view once, so
+    /// the views themselves bound it — no per-key traversal of them.
+    remaining: usize,
 }
 
 impl<'a> Ancestors<'a> {
@@ -112,6 +122,7 @@ impl<'a> Ancestors<'a> {
         Self {
             tree,
             next: Some(id),
+            remaining: tree.views.len(),
         }
     }
 }
@@ -120,12 +131,14 @@ impl Iterator for Ancestors<'_> {
     type Item = NodeId;
 
     fn next(&mut self) -> Option<NodeId> {
+        self.remaining = self.remaining.checked_sub(1)?;
         let id = self.next?;
         let view = self.tree.get(id)?;
         self.next = if view.kind == ViewKind::Modal {
             None
         } else {
-            view.parent
+            // The logical parent of a portaled view, else the mounted one.
+            view.props.key_parent.or(view.parent)
         };
         Some(id)
     }

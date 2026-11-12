@@ -917,7 +917,10 @@ The app's shortcuts and its menus' are matched first, as on the desktops; the ra
 terminal's defaults (Tab's traversal, Return and Space pressing, scrolling, Escape going back). A transition is
 reported once, on the focused view (or the text view of a focused link): the engine bubbles it to the enabled
 ancestors that listen, in this surface's window — a sheet (`Modal`) is the keyboard boundary, as a window is on
-the desktops. A release reaches the view that has the focus when it arrives; a terminal cannot pair it with a
+the desktops. A portaled `Overlay` is mounted in a root view, but its logical parent is the view that declared
+it: interest and capture follow that logical parent (the core's `ViewProps::key_parent`), as the engine's
+bubbling does, so a portal's keys reach its declaring view's listeners and capture rules and not another
+portal's. A release reaches the view that has the focus when it arrives; a terminal cannot pair it with a
 press that went to another view.
 
 `capture_keys` (`KeyCapture`: none, all, or a list of shortcuts) is read from the mounted props of the focused
