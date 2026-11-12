@@ -4606,18 +4606,18 @@ mod tests {
     #[component]
     fn InputOwnsKeys() -> impl IntoElement {
         let heard = signal(String::from("none"));
-        let text = signal(String::new());
+        let value = signal(String::new());
         view()
             .flex_1()
             .on_key_down(move |e: &KeyEvent| heard.set(e.key.as_ref().to_owned()))
             .child(
                 input()
                     .test_id("name")
-                    .value(move || text.get())
-                    .on_change(move |value: &str| text.set(value.to_owned())),
+                    .value(move || value.get())
+                    .on_change(move |text: &str| value.set(text.to_owned())),
             )
             .child(text(move || format!("heard {}", heard.get())))
-            .child(text(move || format!("text {}", text.get())))
+            .child(text(move || format!("text {}", value.get())))
     }
 
     #[test]
@@ -4741,6 +4741,7 @@ mod tests {
                 when: When::Auto,
                 repeat: false,
                 pass_through: false,
+                ..Default::default()
             },
             move |_| fired.set("a".into()),
         );
@@ -4750,6 +4751,7 @@ mod tests {
                 when: When::Always,
                 repeat: false,
                 pass_through: true,
+                ..Default::default()
             },
             move |_| fired.set("b".into()),
         );
