@@ -72,7 +72,7 @@ fn Pads() -> impl IntoElement {
     set_interval(Duration::from_millis(5), move || {
         let next = match CAPTURE.load(Ordering::SeqCst) {
             1 => KeyCapture::All,
-            2 => KeyCapture::keys([named.clone()]),
+            2 => KeyCapture::keys([named]),
             _ => KeyCapture::None,
         };
         if policy.get_untracked() != next {
@@ -256,7 +256,7 @@ fn send_flags(window: &NSWindow, first: &NSView, code: u16, flags: NSEventModifi
     // still hands it to the view; the second arrival is deduplicated.
     // SAFETY: `flagsChanged:` is the responder method, on the main thread,
     // with a valid event.
-    let _: () = unsafe { msg_send![&*first, flagsChanged: &*event] };
+    let _: () = unsafe { msg_send![first, flagsChanged: &*event] };
     pump(60);
 }
 
