@@ -4614,6 +4614,7 @@ mod tests {
                         overlay().child(
                             view()
                                 .test_id("pad")
+                                .w(px(120.0))
                                 .h(px(40.0))
                                 .focusable(true)
                                 .on_press(move |_: &()| {}),
@@ -4625,6 +4626,7 @@ mod tests {
                     overlay().child(
                         view()
                             .test_id("sibling")
+                            .w(px(120.0))
                             .h(px(40.0))
                             .focusable(true)
                             .on_press(move |_: &()| {})
