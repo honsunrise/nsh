@@ -932,8 +932,15 @@ What a `KeyEvent` can say follows the input source. A release and an auto-repeat
 that reports event types: the kitty keyboard protocol, which the standalone host negotiates, and Windows'
 console input, which crossterm reads with kinds on every key. The flags the host pushes add the event types to
 the keys the terminal sends as escape codes — the functional keys and those with modifiers; a plain text key
-stays text, so its release or repeat arrives only where the terminal reports it anyway. Without the protocol a
-terminal sends presses alone, and those are presses: the host never invents a release, a repeat or a scan code.
+stays text, so its release or repeat arrives only where the terminal reports it anyway. That is deliberate:
+kitty's "report all keys as escape codes" flag (8) would give text keys repeats and releases too, but it also
+stops the terminal sending their text at all; the text is only reportable through a CSI-u event's
+associated-text field (flag 16), which crossterm drops, so composed input (dead keys, IME, an AltGr character)
+would be lost or arrive as the base key's character. The same flag is why Enter, Tab and Backspace carry no
+release here: the protocol leaves them in their legacy bytes, which a shell needs, unless every key is
+escape-coded. Full key events for plain text need a parser that reads that field; until there is one, typing
+stays as the terminals send it. Without the protocol a terminal sends presses alone, and those are presses:
+the host never invents a release, a repeat or a scan code.
 With `REPORT_ALTERNATE_KEYS`, crossterm reports a shifted key as the character the user's layout types and
 clears Shift from that event's modifiers: `key` and `text` are that character (the DOM's key for the press),
 while the Key scheme's canonical keystroke still matches `shift+…` shortcuts. A modifier key arrives only when
