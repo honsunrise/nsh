@@ -78,7 +78,9 @@ pub(crate) fn clear(surface: &Surface) {
 /// virtual key code for (`?` is `shift+/`, from the source's own key and
 /// modifiers): the shared table then matches that stroke instead, with
 /// the same window, focused-control yielding, repeat and pass-through
-/// rules. A key with a virtual code keeps matching by it.
+/// rules — the platform's own repeat mark (`event.repeat`) counting too,
+/// and the held stroke updated either way. A key with a virtual code keeps
+/// matching by it.
 pub(crate) fn key_stroke(
     surface: &Rc<Surface>,
     event: &KeyEvent,
@@ -91,7 +93,7 @@ pub(crate) fn key_stroke(
         return false;
     };
     let repeat = match source {
-        Some(stroke) => repeats_stroke(&surface.keymap, stroke),
+        Some(stroke) => repeats_stroke(&surface.keymap, stroke, event.repeat),
         None => repeats(&surface.keymap, event),
     };
     let Some(table) = surface.keymap.table.borrow().clone() else {
@@ -134,11 +136,13 @@ fn repeats(state: &KeymapState, event: &KeyEvent) -> bool {
 
 /// Whether a key down of a key nsh has no virtual code for is an
 /// auto-repeat: the same shortcut stroke again, unreleased (X11 marks no
-/// repeats). Its platform-marked repeat is `event.repeat`, which the
-/// caller adds.
-fn repeats_stroke(state: &KeymapState, stroke: Keystroke) -> bool {
+/// repeats), or the repeat the platform marks (`is_held`, on macOS, Windows
+/// and Wayland) even where the held state is gone (a window that was
+/// deactivated, its key released elsewhere). The held key is updated
+/// either way, as for a key with a code.
+fn repeats_stroke(state: &KeymapState, stroke: Keystroke, repeat: bool) -> bool {
     let held = Held::Stroke(stroke);
-    state.held.replace(Some(held)) == Some(held)
+    state.held.replace(Some(held)) == Some(held) || repeat
 }
 
 /// A modifier key (which does not end another key's auto-repeat).
@@ -313,16 +317,20 @@ mod tests {
         let surface = Surface::new(nsh_engine::Environment::default());
         let question = Keystroke::parse_with("shift+/", false).unwrap();
         let star = Keystroke::parse_with("shift+8", false).unwrap();
-        assert!(!repeats_stroke(&surface.keymap, question));
+        assert!(!repeats_stroke(&surface.keymap, question, false));
         // X11's auto-repeat: the same key again, unreleased.
-        assert!(repeats_stroke(&surface.keymap, question));
+        assert!(repeats_stroke(&surface.keymap, question, false));
         // Another such key is not its repeat.
-        assert!(!repeats_stroke(&surface.keymap, star));
+        assert!(!repeats_stroke(&surface.keymap, star, false));
         // Its own release ends the hold; another stroke's does not.
         released_stroke(&surface, &question);
-        assert!(repeats_stroke(&surface.keymap, star));
+        assert!(repeats_stroke(&surface.keymap, star, false));
         released_stroke(&surface, &star);
-        assert!(!repeats_stroke(&surface.keymap, star));
+        assert!(!repeats_stroke(&surface.keymap, star, false));
+        // A repeat the platform marks is one even where the held state was
+        // cleared (a deactivated window, its key released elsewhere).
+        released_stroke(&surface, &star);
+        assert!(repeats_stroke(&surface.keymap, star, true));
         // A virtual key held is not released by a key with no code.
         let key = |vk| KeyEvent {
             vk,
