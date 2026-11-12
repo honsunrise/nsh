@@ -130,11 +130,7 @@ fn window_root(surface: &Surface, view: &NshView) -> bool {
 /// after the root of a window of the app's own: keys do not cross native
 /// windows. Ordinary focus, hit testing and layout keep their mounted
 /// parents; only this interest/capture walk follows the override.
-fn walk_keyboard(
-    surface: &Surface,
-    view: &NshView,
-    mut f: impl FnMut(&NshView) -> bool,
-) -> bool {
+fn walk_keyboard(surface: &Surface, view: &NshView, mut f: impl FnMut(&NshView) -> bool) -> bool {
     let window = window_of(surface, view);
     let mut current = Some(view.clone());
     // Bounded: a routing override is core's, but a broken one must not hang
@@ -267,7 +263,13 @@ pub(crate) fn focus_pointer(surface: &std::rc::Rc<Surface>, view: &NshView) {
 /// the view that had it and the focus of the new one.
 fn focus_view(surface: &std::rc::Rc<Surface>, view: &NshView, reveal: bool) {
     let window = window_of(surface, view);
-    if surface.keyboard.focus.borrow().get(&window).is_some_and(|held| held == view) {
+    if surface
+        .keyboard
+        .focus
+        .borrow()
+        .get(&window)
+        .is_some_and(|held| held == view)
+    {
         return;
     }
     // A field of this window that edits leaves the focus to the custom
@@ -284,12 +286,7 @@ fn focus_view(surface: &std::rc::Rc<Surface>, view: &NshView, reveal: bool) {
         .focus
         .borrow_mut()
         .insert(window, view.clone());
-    crate::input::set_state(
-        surface,
-        view,
-        nsh_core::tailwind::state::FOCUSED,
-        true,
-    );
+    crate::input::set_state(surface, view, nsh_core::tailwind::state::FOCUSED, true);
     surface.event(view.id(), EventKind::Focus, EventPayload::None);
     // Focused stops report it to assistive technologies, as fields do.
     crate::access::focus_changed(surface, view);
@@ -385,12 +382,7 @@ fn within(view: &NshView, ancestor: &NshView) -> bool {
 /// Reports the blur of `view`: its `focus:` state goes off and a `Blur`
 /// event follows.
 fn blur_view(surface: &Surface, view: &NshView) {
-    crate::input::set_state(
-        surface,
-        view,
-        nsh_core::tailwind::state::FOCUSED,
-        false,
-    );
+    crate::input::set_state(surface, view, nsh_core::tailwind::state::FOCUSED, false);
     surface.event(view.id(), EventKind::Blur, EventPayload::None);
     view.changed();
 }
@@ -670,8 +662,9 @@ fn typed_text(event: &KeyEvent) -> Option<SharedString> {
 /// extended key. `None` when the message carries no scan code (input the
 /// system injected as text, `VK_PACKET`).
 fn physical(event: &KeyEvent) -> Option<PhysicalKey> {
-    (event.scan != 0)
-        .then_some(PhysicalKey::Native(u32::from(event.scan) | (u32::from(event.extended) << 8)))
+    (event.scan != 0).then_some(PhysicalKey::Native(
+        u32::from(event.scan) | (u32::from(event.extended) << 8),
+    ))
 }
 
 /// The capture rule's keystroke: the same shortcut key [`crate::keymap`]
@@ -808,8 +801,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::geom::rect;
-    use crate::input::Modifiers;
+    use crate::{geom::rect, input::Modifiers};
 
     fn apply(surface: &std::rc::Rc<Surface>, items: &[MountItem]) {
         for item in items {
@@ -936,7 +928,13 @@ mod tests {
         assert!(listens(&surface, &inner), "a capture rule is a raw path");
         let mut mask = EventMask::default();
         mask.set(EventKind::KeyDown, true);
-        apply(&surface, &[MountItem::Events { id: 2, events: mask }]);
+        apply(
+            &surface,
+            &[MountItem::Events {
+                id: 2,
+                events: mask,
+            }],
+        );
         assert!(listens(&surface, &inner));
         assert!(captures(&surface, &inner, Some(&escape)));
         let enter = stroke("enter");
@@ -997,7 +995,13 @@ mod tests {
         apply(&surface, &[MountItem::ViewProps { id: 2, props }]);
         let mut mask = EventMask::default();
         mask.set(EventKind::KeyDown, true);
-        apply(&surface, &[MountItem::Events { id: 2, events: mask }]);
+        apply(
+            &surface,
+            &[MountItem::Events {
+                id: 2,
+                events: mask,
+            }],
+        );
         assert!(listens(&surface, &view));
         assert!(!press(&surface, &key(0x41)));
     }
@@ -1079,7 +1083,13 @@ mod tests {
         let ancestor = under(&surface, ROOT_ID, 2, false);
         let mut mask = EventMask::default();
         mask.set(EventKind::KeyDown, true);
-        apply(&surface, &[MountItem::Events { id: 2, events: mask }]);
+        apply(
+            &surface,
+            &[MountItem::Events {
+                id: 2,
+                events: mask,
+            }],
+        );
         let escape = stroke("escape");
         let mut props = ancestor.state().props.clone();
         props.key_capture = nsh_core::KeyCapture::keys([escape]);

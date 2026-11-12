@@ -4468,22 +4468,24 @@ mod tests {
     #[component]
     fn RawKey() -> impl IntoElement {
         let heard = signal(String::from("none"));
-        view().flex_1().child(
-            view()
-                .test_id("pad")
-                .h(px(40.0))
-                .focusable(true)
-                .on_press(move |_: &()| {})
-                .on_key_down(move |e: &KeyEvent| {
-                    heard.set(format!(
-                        "{} {} {}",
-                        e.key,
-                        e.text.as_deref().unwrap_or("none"),
-                        e.physical.is_none()
-                    ));
-                }),
-        )
-        .child(text(move || format!("heard {}", heard.get())))
+        view()
+            .flex_1()
+            .child(
+                view()
+                    .test_id("pad")
+                    .h(px(40.0))
+                    .focusable(true)
+                    .on_press(move |_: &()| {})
+                    .on_key_down(move |e: &KeyEvent| {
+                        heard.set(format!(
+                            "{} {} {}",
+                            e.key,
+                            e.text.as_deref().unwrap_or("none"),
+                            e.physical.is_none()
+                        ));
+                    }),
+            )
+            .child(text(move || format!("heard {}", heard.get())))
     }
 
     #[test]
@@ -4604,23 +4606,23 @@ mod tests {
                     .on_key_down(move |e: &KeyEvent| {
                         heard.set(format!("{} {}", e.key.as_ref(), e.captured));
                     })
-                    .capture_keys(KeyCapture::keys([
-                        Keystroke::parse("a", Os::Linux).unwrap(),
-                    ]))
+                    .capture_keys(KeyCapture::keys(
+                        [Keystroke::parse("a", Os::Linux).unwrap()],
+                    ))
                     .child(text("host"))
-                    .child(overlay().child(
-                        view()
-                            .test_id("pad")
-                            .h(px(40.0))
-                            .focusable(true)
-                            .on_press(move |_: &()| {}),
-                    )),
+                    .child(
+                        overlay().child(
+                            view()
+                                .test_id("pad")
+                                .h(px(40.0))
+                                .focusable(true)
+                                .on_press(move |_: &()| {}),
+                        ),
+                    ),
             )
             .child(
-                view()
-                    .test_id("other")
-                    .child(text("other"))
-                    .child(overlay().child(
+                view().test_id("other").child(text("other")).child(
+                    overlay().child(
                         view()
                             .test_id("sibling")
                             .h(px(40.0))
@@ -4629,7 +4631,8 @@ mod tests {
                             .on_key_down(move |e: &KeyEvent| {
                                 sibling.set(format!("{} {}", e.key.as_ref(), e.captured));
                             }),
-                    )),
+                    ),
+                ),
             )
             .child(text(move || format!("heard {}", heard.get())))
             .child(text(move || format!("sibling {}", sibling.get())))

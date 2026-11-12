@@ -274,7 +274,16 @@ extern "system" fn Java_com_longbridge_nsh_Native_keyDown(
         return JNI_FALSE;
     }
     let captured = captured != 0;
-    let event = key_event(code, unicode, text, meta, scan_code, repeat != 0, true, captured);
+    let event = key_event(
+        code,
+        unicode,
+        text,
+        meta,
+        scan_code,
+        repeat != 0,
+        true,
+        captured,
+    );
     host.dispatch(
         focused.max(0) as NodeId,
         EventKind::KeyDown,
@@ -577,20 +586,47 @@ mod tests {
 
     #[test]
     fn reports_actual_unicode_named_keys_and_preview_text() {
-        let shifted = key_event(29, 'a' as i32, 'A' as i32, META_SHIFT_ON, 0, false, true, false);
+        let shifted = key_event(
+            29,
+            'a' as i32,
+            'A' as i32,
+            META_SHIFT_ON,
+            0,
+            false,
+            true,
+            false,
+        );
         assert_eq!(&*shifted.key, "A");
         assert_eq!(shifted.text.as_deref(), Some("A"));
         assert!(shifted.modifiers.shift && !shifted.modifiers.ctrl);
 
         // A shifted punctuation key: the character it reports (`?`), while
         // its shortcut key stays `/` (`keystroke`, above).
-        let question = key_event(76, '/' as i32, '?' as i32, META_SHIFT_ON, 0, false, true, false);
+        let question = key_event(
+            76,
+            '/' as i32,
+            '?' as i32,
+            META_SHIFT_ON,
+            0,
+            false,
+            true,
+            false,
+        );
         assert_eq!(&*question.key, "?");
         assert_eq!(question.text.as_deref(), Some("?"));
 
         // A non-US layout keeps its character both ways; capture normalizes
         // it to the key's US shortcut (`k`) in KeyCaptures.
-        let cyrillic = key_event(39, 'л' as i32, 'Л' as i32, META_SHIFT_ON, 0, false, true, false);
+        let cyrillic = key_event(
+            39,
+            'л' as i32,
+            'Л' as i32,
+            META_SHIFT_ON,
+            0,
+            false,
+            true,
+            false,
+        );
         assert_eq!(&*cyrillic.key, "Л");
         assert_eq!(cyrillic.text.as_deref(), Some("Л"));
         let cyrillic_plain = key_event(39, 'л' as i32, 'л' as i32, 0, 0, false, true, false);
@@ -607,23 +643,55 @@ mod tests {
 
         // A shortcut still reports the source's printable character
         // (Shift+A's `A`), and previews none.
-        let all = key_event(29, 'a' as i32, 'A' as i32, META_CTRL_ON | META_SHIFT_ON, 0, false, true, true);
+        let all = key_event(
+            29,
+            'a' as i32,
+            'A' as i32,
+            META_CTRL_ON | META_SHIFT_ON,
+            0,
+            false,
+            true,
+            true,
+        );
         assert_eq!(&*all.key, "A");
         assert_eq!(all.text, None);
         assert!(all.modifiers.ctrl && all.modifiers.shift && all.captured);
 
         // AltGr or Alt can report a composed printable source character.
-        let composed = key_event(33, 'e' as i32, '€' as i32, META_ALT_ON, 0, false, true, false);
+        let composed = key_event(
+            33,
+            'e' as i32,
+            '€' as i32,
+            META_ALT_ON,
+            0,
+            false,
+            true,
+            false,
+        );
         assert_eq!(&*composed.key, "€");
         assert_eq!(composed.text, None);
 
         // The scan code is the physical key only when Android supplies one.
-        assert_eq!(key_event(29, 'a' as i32, 'a' as i32, 0, 30, false, true, false).physical,
-            Some(nsh_core::PhysicalKey::Native(30)));
-        assert_eq!(key_event(29, 'a' as i32, 'a' as i32, 0, 0, false, true, false).physical, None);
+        assert_eq!(
+            key_event(29, 'a' as i32, 'a' as i32, 0, 30, false, true, false).physical,
+            Some(nsh_core::PhysicalKey::Native(30))
+        );
+        assert_eq!(
+            key_event(29, 'a' as i32, 'a' as i32, 0, 0, false, true, false).physical,
+            None
+        );
 
         // A release previews nothing and is no auto-repeat.
-        let up = key_event(29, 'a' as i32, 'A' as i32, META_SHIFT_ON, 0, false, false, true);
+        let up = key_event(
+            29,
+            'a' as i32,
+            'A' as i32,
+            META_SHIFT_ON,
+            0,
+            false,
+            false,
+            true,
+        );
         assert_eq!(&*up.key, "A");
         assert_eq!(up.text, None);
         assert!(!up.repeat && up.captured);

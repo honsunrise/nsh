@@ -310,9 +310,8 @@ mod tests {
     fn a_key_with_no_virtual_code_repeats_by_its_stroke() {
         use nsh_core::keymap::Keystroke;
 
-        use super::{repeats, repeats_stroke, released_stroke};
-        use crate::input::KeyEvent;
-        use crate::surface::Surface;
+        use super::{released_stroke, repeats, repeats_stroke};
+        use crate::{input::KeyEvent, surface::Surface};
 
         let surface = Surface::new(nsh_engine::Environment::default());
         let question = Keystroke::parse_with("shift+/", false).unwrap();

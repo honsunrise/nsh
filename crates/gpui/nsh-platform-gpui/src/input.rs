@@ -1374,7 +1374,10 @@ pub(crate) fn key_now_raw(
     // The focused view hears the key as the source reported it, and a
     // capture rule over it runs no native default. A text field or a
     // native component owns its keys: its ancestors hear none of them.
-    if !handled && !editing && let Some(raw) = &raw {
+    if !handled
+        && !editing
+        && let Some(raw) = &raw
+    {
         handled = notify_raw(surface, raw);
     }
     handled = handled
@@ -3935,7 +3938,13 @@ mod tests {
             [(1, ROOT_ID), (2, ROOT_ID), (3, 2), (4, 2), (5, ROOT_ID)];
         for &(id, parent) in &tree {
             let mut mounter = surface.mounter.borrow_mut();
-            mounter.apply(&surface, &MountItem::Create { id, kind: ViewKind::View });
+            mounter.apply(
+                &surface,
+                &MountItem::Create {
+                    id,
+                    kind: ViewKind::View,
+                },
+            );
             mounter.apply(
                 &surface,
                 &MountItem::Insert {
@@ -4150,4 +4159,3 @@ mod tests {
         assert!(!hears_keys(&surface));
     }
 }
-

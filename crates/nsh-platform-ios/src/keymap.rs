@@ -218,11 +218,7 @@ fn fire(target: &EventTarget, id: u32) {
 /// does. True when a binding consumed the key; a pass-through binding fires
 /// and the key goes on. `control`: the focused view takes presses
 /// ([`Keymap::find_at`]).
-pub(crate) fn tab_binding_consumes(
-    target: &EventTarget,
-    stroke: Keystroke,
-    control: bool,
-) -> bool {
+pub(crate) fn tab_binding_consumes(target: &EventTarget, stroke: Keystroke, control: bool) -> bool {
     let state = target.keymap();
     let Some(table) = state.table.borrow().clone() else {
         return false;
@@ -312,8 +308,7 @@ pub(crate) fn root_began(target: &EventTarget, presses: &NSSet<UIPress>) -> bool
         // A focusable view ran the table (and its raw keys) before passing
         // the press on: running it here again would fire a binding twice.
         Some(r)
-            if r
-                .downcast_ref::<crate::native_view::NshView>()
+            if r.downcast_ref::<crate::native_view::NshView>()
                 .is_some_and(|view| view.keyboard_target().is_some()) =>
         {
             return false;

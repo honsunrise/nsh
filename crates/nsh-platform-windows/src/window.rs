@@ -187,12 +187,9 @@ fn register_classes() {
         // sees the key down before the caller's `TranslateMessage` (a
         // thread hook needs no DLL), and the private message it leaves
         // carries the key to the window procedure untranslated.
-        if let Err(error) = SetWindowsHookExW(
-            WH_GETMESSAGE,
-            Some(get_message),
-            None,
-            GetCurrentThreadId(),
-        ) {
+        if let Err(error) =
+            SetWindowsHookExW(WH_GETMESSAGE, Some(get_message), None, GetCurrentThreadId())
+        {
             log::warn!(
                 target: "nsh::window",
                 "the key pretranslation hook was not installed: {error}"
@@ -2278,13 +2275,7 @@ mod tests {
         post_key(hwnd, 0x44, 0x20);
         // SAFETY: posting to a window of this thread.
         unsafe {
-            PostMessageW(
-                Some(hwnd),
-                WM_CHAR,
-                WPARAM('x' as usize),
-                LPARAM(0),
-            )
-            .unwrap();
+            PostMessageW(Some(hwnd), WM_CHAR, WPARAM('x' as usize), LPARAM(0)).unwrap();
             PostMessageW(Some(hwnd), WM_NSH_WAKE, WPARAM(0), LPARAM(0)).unwrap();
         }
         post_key(hwnd, 0x42, 0x30);
@@ -2303,10 +2294,7 @@ mod tests {
         let later = next_message(hwnd).expect("the later key");
         assert_eq!(later.message, WM_NSH_KEYDOWN);
         assert!(!translate_and_dispatch(&later));
-        assert!(
-            !char_queued(hwnd),
-            "neither captured key made a character"
-        );
+        assert!(!char_queued(hwnd), "neither captured key made a character");
         // SAFETY: the test's own window.
         unsafe { DestroyWindow(hwnd).unwrap() };
     }
@@ -2323,7 +2311,14 @@ mod tests {
 
         let surface = Surface::new(Default::default());
         surface.root.state_mut().frame = crate::geom::rect(0.0, 0.0, 200.0, 150.0);
-        let hwnd = create(&surface, "NSH key capture binding test", (200, 150), None, false).unwrap();
+        let hwnd = create(
+            &surface,
+            "NSH key capture binding test",
+            (200, 150),
+            None,
+            false,
+        )
+        .unwrap();
         surface.mounter.borrow_mut().apply(
             &surface,
             &[
@@ -2377,13 +2372,7 @@ mod tests {
         set_capture(KeyCapture::None);
         // SAFETY: posting to a window of this thread.
         unsafe {
-            PostMessageW(
-                Some(hwnd),
-                WM_CHAR,
-                WPARAM('x' as usize),
-                LPARAM(0),
-            )
-            .unwrap();
+            PostMessageW(Some(hwnd), WM_CHAR, WPARAM('x' as usize), LPARAM(0)).unwrap();
         }
         assert!(
             !translate_and_dispatch(&down),

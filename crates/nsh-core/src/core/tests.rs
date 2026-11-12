@@ -24594,7 +24594,9 @@ fn key_capture_reads_mounted_rules_with_canonical_strokes() {
     #[component]
     fn Captured() -> impl IntoElement {
         view()
-            .capture_keys(KeyCapture::keys([Keystroke::parse_with("mod+k", true).unwrap()]))
+            .capture_keys(KeyCapture::keys([
+                Keystroke::parse_with("mod+k", true).unwrap()
+            ]))
             .child(view())
     }
 
@@ -24700,9 +24702,7 @@ fn key_interest_walks_portaled_overlay_logical_ancestors() {
 
     #[component]
     fn Portals() -> impl IntoElement {
-        let popup = || {
-            overlay().child(view().test_id("inside").focusable(true))
-        };
+        let popup = || overlay().child(view().test_id("inside").focusable(true));
         view()
             .child(
                 view()
@@ -24763,9 +24763,9 @@ fn key_interest_walks_portaled_overlay_logical_ancestors() {
         })
         .collect();
     assert_eq!(overrides.len(), 2, "{overrides:?}");
-    assert!(overrides.contains(&Some(holder)));
-    assert!(overrides.contains(&Some(view("listener"))));
-    assert!(!overrides.contains(&Some(outside)));
+    assert!(overrides.contains(&holder));
+    assert!(overrides.contains(&view("listener")));
+    assert!(!overrides.contains(&outside));
 }
 
 #[test]
@@ -28150,8 +28150,14 @@ fn capture_keys_decode_from_js() {
             &mut crate::js::host::HostCx::default().with_apple_keyboard(apple),
         )
     };
-    assert_eq!(decode(serde_json::json!("none"), false), Some(KeyCapture::None));
-    assert_eq!(decode(serde_json::json!("all"), true), Some(KeyCapture::All));
+    assert_eq!(
+        decode(serde_json::json!("none"), false),
+        Some(KeyCapture::None)
+    );
+    assert_eq!(
+        decode(serde_json::json!("all"), true),
+        Some(KeyCapture::All)
+    );
     assert_eq!(
         decode(serde_json::json!(["mod+k", "shift+tab"]), true),
         Some(KeyCapture::keys([
@@ -28162,19 +28168,20 @@ fn capture_keys_decode_from_js() {
     // `mod` is Control where conventions are not Apple's.
     assert_eq!(
         decode(serde_json::json!(["mod+k"]), false),
-        Some(KeyCapture::keys([Keystroke::parse_with("mod+k", false).unwrap()]))
+        Some(KeyCapture::keys([
+            Keystroke::parse_with("mod+k", false).unwrap()
+        ]))
     );
     // Nothing and unknown strings clear the rule; invalid keystrokes are
     // reported and left out.
     assert_eq!(decode(serde_json::Value::Null, false), None);
     let mut cx = crate::js::host::HostCx::default().with_apple_keyboard(false);
-    let decoded = KeyCapture::decode(
-        &J(serde_json::json!(["a", "not+a+key"])),
-        &mut cx,
-    );
+    let decoded = KeyCapture::decode(&J(serde_json::json!(["a", "not+a+key"])), &mut cx);
     assert_eq!(
         decoded,
-        Some(KeyCapture::keys([Keystroke::parse_with("a", false).unwrap()]))
+        Some(KeyCapture::keys([
+            Keystroke::parse_with("a", false).unwrap()
+        ]))
     );
     assert!(cx.warnings.iter().any(|w| w.contains("captureKeys")));
 }

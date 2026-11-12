@@ -11,10 +11,9 @@ use super::{
 };
 use crate::{
     AccessibilityProp, AccessibilityRole, AccessibilityState, AccessibilityValue, Bounds,
-    ContextMenuEvent, EdgeInsets, EventKind, EventPayload, Hsla, ImageSource, ListContentStyle,
-    MouseEvent, NativeProp, NodeId, PinchEvent, PointerEvents, Points, PressEvent, Prop, Size, Tag,
-    TouchEvent, WheelEvent,
-    KeyCapture, KeyEvent,
+    ContextMenuEvent, EdgeInsets, EventKind, EventPayload, Hsla, ImageSource, KeyCapture, KeyEvent,
+    ListContentStyle, MouseEvent, NativeProp, NodeId, PinchEvent, PointerEvents, Points,
+    PressEvent, Prop, Size, Tag, TouchEvent, WheelEvent,
     geometry::{DevicePixels, Radians},
     style::Color,
 };

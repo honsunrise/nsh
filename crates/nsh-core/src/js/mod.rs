@@ -238,25 +238,15 @@ mod tests {
             let end = at + elements[at..].find("\n}").unwrap();
             assert!(elements[at..end].contains(prop), "{interface}: {prop}");
         }
-        assert!(elements.contains(
-            "export interface KeyEvent {\n  /** The source's logical key"
-        ));
-        assert!(elements.contains(
-            "  key: string;\n  /** A preview of the character"
-        ));
+        assert!(elements.contains("export interface KeyEvent {\n  /** The source's logical key"));
+        assert!(elements.contains("  key: string;\n  /** A preview of the character"));
         for (interface, prop) in [
             (
                 "ViewHostProps",
                 "  captureKeys?: \"none\" | \"all\" | readonly string[];",
             ),
-            (
-                "ViewHostProps",
-                "  onKeyDown?: (e: KeyEvent) => void;",
-            ),
-            (
-                "ViewHostProps",
-                "  onKeyUp?: (e: KeyEvent) => void;",
-            ),
+            ("ViewHostProps", "  onKeyDown?: (e: KeyEvent) => void;"),
+            ("ViewHostProps", "  onKeyUp?: (e: KeyEvent) => void;"),
         ] {
             let at = elements
                 .find(&format!("export interface {interface} {{"))

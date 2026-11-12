@@ -547,7 +547,10 @@ impl<M: TextEngine> Core<M> {
             let node = &self.nodes[key as usize];
             if node.mounted_events().contains(EventKind::KeyDown)
                 || node.mounted_events().contains(EventKind::KeyUp)
-                || node.props.as_ref().is_some_and(|p| !p.key_capture.is_none())
+                || node
+                    .props
+                    .as_ref()
+                    .is_some_and(|p| !p.key_capture.is_none())
             {
                 return true;
             }

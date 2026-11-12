@@ -254,7 +254,9 @@ fn wait_for_focus_stop(
         if view.state().props.focusable == Some(true) {
             return Some(view.clone());
         }
-        view.child_views().into_iter().find_map(|child| find(&child))
+        view.child_views()
+            .into_iter()
+            .find_map(|child| find(&child))
     }
     let start = Instant::now();
     loop {
@@ -311,7 +313,10 @@ fn a_captured_key_release_is_kept_from_the_window(cx: &mut TestAppContext) {
             cx,
         )
     });
-    assert!(!pressed.propagate, "a captured press reached the window's handlers");
+    assert!(
+        !pressed.propagate,
+        "a captured press reached the window's handlers"
+    );
     assert!(pressed.default_prevented);
     // Without the focus the same release is the window's.
     crate::key_focus::clear(&surface);

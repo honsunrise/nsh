@@ -325,7 +325,7 @@ impl Key {
                 return WINDOWS_SCAN_KEYS
                     .iter()
                     .find(|(scan_code, _)| *scan_code == scan)
-                    .map(|&(_, c)| Key::Char(c))
+                    .map(|&(_, c)| Key::Char(c));
             }
         })
     }
@@ -370,7 +370,7 @@ impl Key {
                 return SCAN_KEYS
                     .iter()
                     .find(|(scan, _)| *scan == code)
-                    .map(|&(_, c)| Key::Char(c))
+                    .map(|&(_, c)| Key::Char(c));
             }
         })
     }
@@ -398,7 +398,9 @@ impl Key {
             126 => Key::Up,
             _ => match APPKIT_FUNCTION_KEYS.iter().position(|&k| k == code) {
                 Some(index) => Key::F((index + 1) as u8),
-                None => Key::Char(*APPKIT_KEYS.get(usize::from(code)).filter(|&&c| c != 0)? as char),
+                None => {
+                    Key::Char(*APPKIT_KEYS.get(usize::from(code)).filter(|&&c| c != 0)? as char)
+                }
             },
         })
     }

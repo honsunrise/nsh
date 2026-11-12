@@ -1299,8 +1299,7 @@ pub(crate) fn tab(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let current = crate::keyboard::focused_in(surface, surface.input_root().id())
         .and_then(|f| stops.iter().position(|v| *v == f))
         .or_else(|| {
-            crate::text_input::focused(surface)
-                .and_then(|f| stops.iter().position(|v| *v == f))
+            crate::text_input::focused(surface).and_then(|f| stops.iter().position(|v| *v == f))
         });
     let Some(next) = input::tab_stop(current, stops.len(), m.shift, true) else {
         return false;
@@ -1591,10 +1590,9 @@ fn down(
     // keeps the keys for itself.
     match &item {
         Some(Item::Input(_)) => {}
-        Some(Item::Hosted(..)) => crate::keyboard::blur_window(
-            surface,
-            crate::app_window::window_of(surface, &hit.view),
-        ),
+        Some(Item::Hosted(..)) => {
+            crate::keyboard::blur_window(surface, crate::app_window::window_of(surface, &hit.view))
+        }
         _ => {
             if let Some(target) = crate::keyboard::focus_target(surface, &hit.view) {
                 crate::keyboard::focus_pointer(surface, &target);

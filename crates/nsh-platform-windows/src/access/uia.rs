@@ -643,8 +643,8 @@ impl IRawElementProviderFragmentRoot_Impl for Root_Impl {
     fn GetFocus(&self) -> Result<IRawElementProviderFragment> {
         let (surface, _, _) = self.window()?;
         // Each window keeps its own keyboard focus; a field's is shared.
-        let focused = crate::keyboard::focused_in(&surface, self.window)
-            .or_else(|| super::focused(&surface));
+        let focused =
+            crate::keyboard::focused_in(&surface, self.window).or_else(|| super::focused(&surface));
         match focused.filter(|v| window_of(&surface, v) == self.window) {
             Some(v) => Ok(element(self.key, &v)),
             None => none(),

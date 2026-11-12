@@ -1568,8 +1568,8 @@ pub unsafe extern "C" fn nsh_key_event(
     let mut event = nsh_core::keyboard::KeyEvent::default();
     event.key = nsh_core::element::SharedString::from(key);
     event.text = (!text.is_empty()).then(|| nsh_core::element::SharedString::from(text));
-    event.physical = (!physical.is_empty())
-        .then(|| nsh_core::keyboard::PhysicalKey::Code(physical.into()));
+    event.physical =
+        (!physical.is_empty()).then(|| nsh_core::keyboard::PhysicalKey::Code(physical.into()));
     event.modifiers = modifiers;
     event.repeat = repeat != 0;
     let kind = if down != 0 {

@@ -623,7 +623,10 @@ impl EventTarget {
     /// it is in, else the surface's root view, so a Tab never reaches the
     /// stops a presented modal covers. `None` when neither is known (the
     /// caller falls back to the window).
-    pub(crate) fn focus_scope(&self, view: &crate::native_view::NshView) -> Option<Retained<UIView>> {
+    pub(crate) fn focus_scope(
+        &self,
+        view: &crate::native_view::NshView,
+    ) -> Option<Retained<UIView>> {
         let mtm = self.mtm();
         let scope = match self.ivars().mounter.get(mtm).try_borrow() {
             Ok(m) => m.as_ref().and_then(|m| m.focus_scope(view)),

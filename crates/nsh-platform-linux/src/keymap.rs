@@ -310,14 +310,7 @@ pub(crate) fn raw(surface: &Surface, event: &gtk::gdk::Event, repeat: bool) -> R
             &triggers[..],
             root.id(),
             repeat,
-            |claim| {
-                fires(
-                    surface,
-                    root.upcast_ref(),
-                    claim.in_text,
-                    claim.yields,
-                )
-            },
+            |claim| fires(surface, root.upcast_ref(), claim.in_text, claim.yields),
             |trigger| trigger.trigger(event, false),
         )
     };
@@ -550,9 +543,7 @@ mod tests {
     }
 
     /// `(trigger, binding)` pairs as [`super::set`] claims them.
-    fn claims(
-        pairs: Vec<(gtk::ShortcutTrigger, KeyBinding)>,
-    ) -> Vec<super::Claim> {
+    fn claims(pairs: Vec<(gtk::ShortcutTrigger, KeyBinding)>) -> Vec<super::Claim> {
         pairs
             .into_iter()
             .map(|(trigger, binding)| super::Claim {
@@ -663,15 +654,19 @@ mod tests {
                 ),
                 (
                     trigger("<Control>a"),
-                    KeyBinding::new(2, stroke("mod+a"), When::Always, false)
-                        .passing_through(true),
+                    KeyBinding::new(2, stroke("mod+a"), When::Always, false).passing_through(true),
                 ),
             ]);
             let exact = matches([("<Control>a", gtk::gdk::KeyMatch::Exact)]);
             // The newest binding does not fire here: the older one is the
             // press's.
-            let (fired, binding) =
-                super::pick(&triggers, ROOT_ID, false, |claim| claim.binding.id == 1, &exact);
+            let (fired, binding) = super::pick(
+                &triggers,
+                ROOT_ID,
+                false,
+                |claim| claim.binding.id == 1,
+                &exact,
+            );
             assert_eq!(fired, super::RawFire::Consumed);
             assert_eq!(binding.map(|binding| binding.id), Some(1));
             // None eligible: no binding takes the key at all.

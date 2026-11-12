@@ -198,7 +198,9 @@ fn view_with_id(view: &NSView, id: &str) -> Option<Retained<NSView>> {
     {
         return Some(view.retain());
     }
-    view.subviews().iter().find_map(|child| view_with_id(&child, id))
+    view.subviews()
+        .iter()
+        .find_map(|child| view_with_id(&child, id))
 }
 
 /// A key event: `characters` is what the key types, `ignoring` its key
@@ -293,9 +295,7 @@ pub(super) fn run() {
     surface.load(platform::App::Rust(platform::Root::of::<Pads>()));
     window.makeKeyAndOrderFront(None);
     let root = surface.view();
-    until("the pads' mount", || {
-        view_with_id(&root, "first").is_some()
-    });
+    until("the pads' mount", || view_with_id(&root, "first").is_some());
     let first = view_with_id(&root, "first").expect("the first pad");
     let second = view_with_id(&root, "second").expect("the second pad");
     // The app focuses the first pad through its ref, as Tab or `focus()`
@@ -331,9 +331,15 @@ pub(super) fn run() {
     );
     until("the plain key", || recorded("up key=a "));
     let plain = "down key=a text=a physical=Some(Native(0)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false";
-    assert!(happened(plain), "the plain press: {:?}", EVENTS.lock().unwrap());
     assert!(
-        happened("up key=a text=- physical=Some(Native(0)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false"),
+        happened(plain),
+        "the plain press: {:?}",
+        EVENTS.lock().unwrap()
+    );
+    assert!(
+        happened(
+            "up key=a text=- physical=Some(Native(0)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false"
+        ),
         "the release types no text: {:?}",
         EVENTS.lock().unwrap()
     );
@@ -364,7 +370,9 @@ pub(super) fn run() {
         ),
     );
     until("Shift+A", || {
-        happened("down key=A text=A physical=Some(Native(0)) shift=true ctrl=false alt=false cmd=false repeat=false captured=false")
+        happened(
+            "down key=A text=A physical=Some(Native(0)) shift=true ctrl=false alt=false cmd=false repeat=false captured=false",
+        )
     });
 
     // Option types a layout character; the logical key keeps it, and the
@@ -383,7 +391,9 @@ pub(super) fn run() {
         ),
     );
     until("Option+A", || {
-        happened("down key=å text=- physical=Some(Native(0)) shift=false ctrl=false alt=true cmd=false repeat=false captured=false")
+        happened(
+            "down key=å text=- physical=Some(Native(0)) shift=false ctrl=false alt=true cmd=false repeat=false captured=false",
+        )
     });
 
     // Named keys follow AppKit's virtual key codes, not their characters.
@@ -424,9 +434,13 @@ pub(super) fn run() {
         ),
     );
     until("the named keys", || {
-        happened("down key=Enter text=- physical=Some(Native(36)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false")
-            && happened("down key=ArrowLeft text=- physical=Some(Native(123)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false")
-            && happened("down key=F5 text=- physical=Some(Native(96)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false")
+        happened(
+            "down key=Enter text=- physical=Some(Native(36)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false",
+        ) && happened(
+            "down key=ArrowLeft text=- physical=Some(Native(123)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false",
+        ) && happened(
+            "down key=F5 text=- physical=Some(Native(96)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false",
+        )
     });
 
     // AppKit marks auto-repeats itself.
@@ -443,21 +457,28 @@ pub(super) fn run() {
         ),
     );
     until("the repeat", || {
-        happened("down key=f text=f physical=Some(Native(3)) shift=false ctrl=false alt=false cmd=false repeat=true captured=false")
+        happened(
+            "down key=f text=f physical=Some(Native(3)) shift=false ctrl=false alt=false cmd=false repeat=true captured=false",
+        )
     });
 
     // Modifier keys are `flagsChanged`: each transition is a named
     // KeyDown/KeyUp, and releasing one Shift keeps the other held.
     send_flags(&window, &first, 56, NSEventModifierFlags::Shift);
     until("Shift down", || {
-        happened("down key=Shift text=- physical=Some(Native(56)) shift=true ctrl=false alt=false cmd=false repeat=false captured=false")
+        happened(
+            "down key=Shift text=- physical=Some(Native(56)) shift=true ctrl=false alt=false cmd=false repeat=false captured=false",
+        )
     });
     send_flags(&window, &first, 60, NSEventModifierFlags::Shift);
     send_flags(&window, &first, 56, NSEventModifierFlags::Shift);
     send_flags(&window, &first, 60, NSEventModifierFlags::empty());
     until("Shift up", || {
-        happened("up key=Shift text=- physical=Some(Native(56)) shift=true ctrl=false alt=false cmd=false repeat=false captured=false")
-            && happened("up key=Shift text=- physical=Some(Native(60)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false")
+        happened(
+            "up key=Shift text=- physical=Some(Native(56)) shift=true ctrl=false alt=false cmd=false repeat=false captured=false",
+        ) && happened(
+            "up key=Shift text=- physical=Some(Native(60)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false",
+        )
     });
 
     // A release whose press was never tracked (the app lost the focus, or
@@ -465,7 +486,9 @@ pub(super) fn run() {
     // KeyUp, never a KeyDown that reports the modifier as off.
     send_flags(&window, &first, 61, NSEventModifierFlags::empty());
     until("the untracked Option release", || {
-        happened("up key=Alt text=- physical=Some(Native(61)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false")
+        happened(
+            "up key=Alt text=- physical=Some(Native(61)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false",
+        )
     });
     assert!(
         !recorded("down key=Alt "),
@@ -490,12 +513,11 @@ pub(super) fn run() {
         ),
     );
     until("the captured Tab", || {
-        happened("down key=Tab text=- physical=Some(Native(48)) shift=false ctrl=false alt=false cmd=false repeat=false captured=true")
+        happened(
+            "down key=Tab text=- physical=Some(Native(48)) shift=false ctrl=false alt=false cmd=false repeat=false captured=true",
+        )
     });
-    assert!(
-        has_focus(&window, &first),
-        "a captured Tab is no traversal"
-    );
+    assert!(has_focus(&window, &first), "a captured Tab is no traversal");
 
     // Without the capture, Tab is AppKit's key view loop: the focus moves
     // to the next focusable pad, as it did before raw keys existed.
@@ -537,7 +559,9 @@ pub(super) fn run() {
         ),
     );
     until("the named capture", || {
-        happened("down key=A text=A physical=Some(Native(0)) shift=true ctrl=false alt=false cmd=false repeat=false captured=true")
+        happened(
+            "down key=A text=A physical=Some(Native(0)) shift=true ctrl=false alt=false cmd=false repeat=false captured=true",
+        )
     });
 
     // Overlays are moved to a root view's host natively while their logical

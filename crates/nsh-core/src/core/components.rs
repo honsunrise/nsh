@@ -5022,7 +5022,11 @@ impl<M: TextEngine> Core<M> {
                 if events.contains(EventKind::KeyDown) || events.contains(EventKind::KeyUp) {
                     return true;
                 }
-                if node.props.as_ref().is_some_and(|p| !p.key_capture.is_none()) {
+                if node
+                    .props
+                    .as_ref()
+                    .is_some_and(|p| !p.key_capture.is_none())
+                {
                     return true;
                 }
             }

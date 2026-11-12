@@ -27,14 +27,13 @@ use objc2_ui_kit::{
     NSValueUIGeometryExtensions, UIApplication, UIApplicationDidBecomeActiveNotification,
     UIApplicationDidEnterBackgroundNotification, UIApplicationState,
     UIApplicationWillEnterForegroundNotification, UIApplicationWillResignActiveNotification,
-    UIDevice, UIFont, UIFontTextStyleBody, UIKeyboardAnimationCurveUserInfoKey,
-    UIKeyboardAnimationDurationUserInfoKey, UIKeyboardFrameEndUserInfoKey,
-    UIKeyboardWillChangeFrameNotification, UIKeyboardWillHideNotification, UIPress,
-    UIPressesEvent, UIResponder, UISceneActivationState, UISceneDidActivateNotification,
-    UISceneDidEnterBackgroundNotification, UISceneWillDeactivateNotification,
-    UISceneWillEnterForegroundNotification, UIFocusAnimationCoordinator, UIFocusUpdateContext,
-    UITraitCollection, UITraitEnvironment, UIUserInterfaceIdiom, UIUserInterfaceStyle, UIView,
-    UIWindowScene,
+    UIDevice, UIFocusAnimationCoordinator, UIFocusUpdateContext, UIFont, UIFontTextStyleBody,
+    UIKeyboardAnimationCurveUserInfoKey, UIKeyboardAnimationDurationUserInfoKey,
+    UIKeyboardFrameEndUserInfoKey, UIKeyboardWillChangeFrameNotification,
+    UIKeyboardWillHideNotification, UIPress, UIPressesEvent, UIResponder, UISceneActivationState,
+    UISceneDidActivateNotification, UISceneDidEnterBackgroundNotification,
+    UISceneWillDeactivateNotification, UISceneWillEnterForegroundNotification, UITraitCollection,
+    UITraitEnvironment, UIUserInterfaceIdiom, UIUserInterfaceStyle, UIView, UIWindowScene,
 };
 
 use crate::{
