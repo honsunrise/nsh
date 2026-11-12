@@ -1515,6 +1515,80 @@ pub extern "C" fn nsh_key_command(id: u32) -> f64 {
     })
 }
 
+/// A key transition the browser reported on view `id` (`down`: a press, not
+/// a release): the raw logical key `KeyboardEvent.key` names (`"A"`, `"é"`,
+/// `"ArrowLeft"`), the text it types on this press (`text_len` 0 for none)
+/// and its physical `KeyboardEvent.code` (`physical_len` 0 for none), with
+/// `modifiers` bits 1 Ctrl, 2 Alt, 4 Shift, 8 Meta and `repeat` for an
+/// auto-repeat.
+///
+/// The core builds the event, decides from the mounted `captureKeys` rules
+/// of `id` and its enabled ancestors whether the transition is captured
+/// (then no browser default follows), and routes the one event to the view
+/// and its ancestors. Returns the pump delay, as every entry into the
+/// engine does; [`nsh_key_captured`] answers whether the key was captured
+/// (`nsh.js` then prevents the browser's default).
+///
+/// # Safety
+///
+/// `key..key + key_len`, `text..text + text_len` and
+/// `physical..physical + physical_len` are memory from [`nsh_alloc`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_key_event(
+    id: u32,
+    down: u32,
+    key: *const u8,
+    key_len: usize,
+    text: *const u8,
+    text_len: usize,
+    physical: *const u8,
+    physical_len: usize,
+    modifiers: u32,
+    repeat: u32,
+) -> f64 {
+    // SAFETY: guaranteed by the caller.
+    let key = unsafe { string(key, key_len) };
+    // SAFETY: guaranteed by the caller.
+    let text = unsafe { string(text, text_len) };
+    // SAFETY: guaranteed by the caller.
+    let physical = unsafe { string(physical, physical_len) };
+    let mut event = nsh_core::keyboard::KeyEvent::default();
+    event.key = nsh_core::element::SharedString::from(key);
+    event.text = (!text.is_empty()).then(|| nsh_core::element::SharedString::from(text));
+    event.physical = (!physical.is_empty())
+        .then(|| nsh_core::keyboard::PhysicalKey::Code(physical.into()));
+    event.modifiers = Modifiers {
+        ctrl: modifiers & 1 != 0,
+        alt: modifiers & 2 != 0,
+        shift: modifiers & 4 != 0,
+        cmd: modifiers & 8 != 0,
+    };
+    event.repeat = repeat != 0;
+    let kind = if down != 0 {
+        EventKind::KeyDown
+    } else {
+        EventKind::KeyUp
+    };
+    let mut captured = false;
+    let delay = send(|app| captured = app.engine.key_event(id, kind, EventPayload::Key(event)));
+    KEY_CAPTURED.with(|c| c.set(captured));
+    delay
+}
+
+thread_local! {
+    /// The capture answer of the last [`nsh_key_event`], read by
+    /// [`nsh_key_captured`].
+    static KEY_CAPTURED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether [`nsh_key_event`]'s last transition was captured by the mounted
+/// `captureKeys` policy: 1 when it was (the browser's default must not
+/// run), 0 when it was not.
+#[unsafe(no_mangle)]
+pub extern "C" fn nsh_key_captured() -> f64 {
+    KEY_CAPTURED.with(|c| c.get()) as u8 as f64
+}
+
 /// A scroll view's offset changed (`applied`: the scrolls the core asked
 /// for that were applied before it).
 #[unsafe(no_mangle)]

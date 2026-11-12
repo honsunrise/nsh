@@ -847,6 +847,12 @@ fn props_json(p: &ViewProps) -> String {
     if let Some(focusable) = p.focusable {
         let _ = write!(s, ",\"focusable\":{focusable}");
     }
+    // A view that captures keys (`captureKeys`) or hears them: the page
+    // reports its raw key transitions to the core (`nsh_key_event`), which
+    // decides. Only a routing hint: the capture policy is the core's.
+    if !matches!(p.key_capture, nsh_core::keyboard::KeyCapture::None) {
+        s.push_str(",\"capturesKeys\":true");
+    }
     if p.selectable_view {
         s.push_str(",\"selectableView\":true");
     }

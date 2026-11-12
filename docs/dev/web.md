@@ -701,12 +701,24 @@ browsers' touches into what phones report:
   horizontal ones always, have one. A mouse press within 12 px of the edge on the thumb, faded or not, drags it
   (`grabBar`: `onScrollDragStart` / `EndDrag`, snapping off while it is held, a snapping view then settles on the
   nearest snap point). Phones and tablets keep the browser's own overlay scroll bars.
-- **Keys** (`keyDown`), in this order: the app's shortcuts (`nsh`'s `keymap`: the mounted `MountItem::Keymap` stays in
+- **Keys** (`keyDown` / `keyUp`), in this order: the app's shortcuts (`nsh`'s `keymap`: the mounted `MountItem::Keymap` stays in
   Rust, `nsh_key` matches a key on the spot with `Keymap::find` and `nsh_key_command` reports the binding.
   Its `f64` result preserves the full `u32` ID range, including Rust shortcuts and overlay Escape, apart from
-  the `-1` (unmatched) and `-2` (held repeat) sentinels. Keys are passed as the character they type without
-  modifiers, else the US layout's character of their `code`; `mod` was resolved by the browser's platform,
-  `appleKeyboard` in the environment JSON); an open dialog (Escape presses its
+  the `-1` (unmatched) and `-2` (held repeat) sentinels. Those matches use the canonical shortcut key: the character
+  typed without modifiers, else the US layout's character of their `code`; `mod` was resolved by the browser's
+  platform, `appleKeyboard` in the environment JSON); then the focused view's raw key transition and its mounted
+  `captureKeys` policy (`nsh_key_event`, Rust's `KeyEvent` and `KeyCapture`): the event carries the browser's own
+  `KeyboardEvent.key` as its logical key (its actual case and layout, never forced onto a US layout) and
+  `KeyboardEvent.code` as its physical key, the text the key types on a press (nothing for a release, a composing
+  key, or a Control/Alt/Command combination) and the modifiers, repeat and captured flags. The core matches the
+  mounted `captureKeys` rules against the existing shortcut keystroke the key's `code` names (the `keymap`
+  vocabulary, never the raw logical string), reads the mounted rules of the focused view and its enabled ancestors
+  up to its window root, before any browser default,
+  and routes ONE event through its common bubbling to that view and its ancestors — for both the press and its
+  release, with `captured` computed anew for each. A captured key produces no text or browser default (Tab moves
+  no focus, Space scrolls nothing, Escape goes nowhere); an uncaptured one only notifies. A view with no raw
+  listener and no capture in its ancestry takes the fast path, and native fields, contenteditable elements, hosted
+  pages, videos and a key an input method is composing keep their own keys. Then: an open dialog (Escape presses its
   cancel button); a focused field (Escape leaves it); a custom context menu (Shift+F10 or the Menu key);
   selectable text with a selection (select all, in a selectable view the whole area; Escape); a focused
   pressable (Return presses it, Space when released); going back (Escape, Alt+Left, Cmd+[, BrowserBack); scrolling the

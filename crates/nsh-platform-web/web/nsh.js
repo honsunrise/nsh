@@ -7819,6 +7819,62 @@ class Player {
     }
   }
 
+  /** Whether `view` or a view around it hears raw keys (`onKeyDown` /
+   * `onKeyUp`) or mounts a capture rule (`captureKeys`): only then does a
+   * key need the core's answer before the browser's defaults. A routing
+   * hint, not the policy: the core reads the mounted rules itself
+   * (`nsh_key_event`). */
+  keysTracked(view) {
+    for (const el of this.ancestors(view)) {
+      if (el._events?.has("onKeyDown") || el._events?.has("onKeyUp") || el._props?.capturesKeys) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Reports a raw key transition on `view` to the core, which decides with
+   * the mounted capture rules of it and its enabled ancestors and routes
+   * one event to the view and its ancestors (no duplicates here): true
+   * when the policy captured the key, so the browser's default does not
+   * run. The event carries what the browser reported — `e.key` as its
+   * logical key (its actual case and layout) and `e.code` as its physical
+   * one — never a US-layout guess; `text` is what the key types on this
+   * press, and nothing for a release, a composing key or a
+   * Control/Alt/Command shortcut.
+   */
+  rawKey(view, down, e) {
+    if (!this.wasm?.nsh_key_event) return false;
+    // An input method owns a composing key (some browsers report 229 rather
+    // than `isComposing`): the raw key is not the app's.
+    if (e.isComposing || e.keyCode === 229) return false;
+    const key = typeof e.key === "string" && e.key !== "" ? e.key : "Unidentified";
+    const text = down && !e.isComposing && !e.ctrlKey && !e.altKey && !e.metaKey
+      && [...key].length === 1 && key >= " " ? key : "";
+    const physical = typeof e.code === "string" ? e.code : "";
+    const modifiers = (e.ctrlKey ? 1 : 0) | (e.altKey ? 2 : 0) | (e.shiftKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+    let captured = false;
+    // The event's entry into the engine returns the pump delay, as every
+    // entry does; the capture answer of that transition comes separately.
+    this.call(() => {
+      const delay = this.withStrings([key, text, physical], (kp, kl, tp, tl, pp, pl) =>
+        this.wasm.nsh_key_event(view._id, down ? 1 : 0, kp, kl, tp, tl, pp, pl,
+          modifiers, e.repeat ? 1 : 0));
+      captured = this.wasm.nsh_key_captured?.() > 0;
+      return delay;
+    });
+    return captured;
+  }
+
+  /** The view that holds the keyboard focus in this player, when it is a
+   * view of the app's and not a native field, page or video, which keeps
+   * its own keys. */
+  keyFocusView() {
+    const focus = document.activeElement;
+    if (!focus || focus === document.body || !this.root.contains(focus)) return null;
+    if (focus.isContentEditable || focus.closest?.(".nsh-field, [contenteditable], iframe, video")) return null;
+    return this.viewOf(focus);
+  }
+
   /**
    * The app's shortcut (`nsh/keymap`) key `e` fires, matched natively
    * against the mounted table: its binding, -2 for a held key whose binding
@@ -7839,7 +7895,7 @@ class Player {
     if (!this.wasm || !this.takesKeys()) return;
     const focus = document.activeElement;
     const inRoot = focus && this.root.contains(focus);
-    const editing = inRoot && !!focus.closest(".nsh-field, iframe");
+    const editing = inRoot && (!!focus.isContentEditable || !!focus.closest(".nsh-field, [contenteditable], iframe"));
     const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
     // The control the focus is on, which Return and Space press (a stop
     // that takes no presses, a `focusable` chart, hears them through the
@@ -7858,6 +7914,16 @@ class Player {
       return;
     }
     if (e.defaultPrevented || e.isComposing) return;
+    // A key the focus hears as a raw transition goes to the core with the
+    // browser's own logical key and physical code; a mounted capture rule
+    // (`captureKeys`) takes it before the browser's defaults, as the native
+    // backends do. Native fields, pages and videos keep their own keys.
+    const keyView = this.keyFocusView();
+    if (keyView && this.keysTracked(keyView) && this.rawKey(keyView, true, e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     // Then they press the control (`nsh_core::input::presses_focused_control`):
     // a binding of Return elsewhere does not act instead of the control the
     // focus was moved to.
@@ -7906,6 +7972,14 @@ class Player {
 
   keyUp(e) {
     if (this.wasm) this.modifiersChanged(e);
+    // The release of a key the core reports on the focused view: it decides
+    // anew whether the mounted capture policy matches this transition
+    // (`nsh_key_event`), as a browser delivers the release to whatever has
+    // the focus now.
+    if (this.wasm && !e.isComposing) {
+      const keyView = this.keyFocusView();
+      if (keyView && this.keysTracked(keyView)) this.rawKey(keyView, false, e);
+    }
     if (e.key === " " && this.keyPress) this.keyPressEnd(true);
   }
 
