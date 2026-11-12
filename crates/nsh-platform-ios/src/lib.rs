@@ -8,10 +8,43 @@
 //!   one main-queue hop per commit.
 //! - Text is measured on the engine thread with the same attributed strings
 //!   the labels render, so layout and rendering agree.
+//! - Hardware keys: a `focusable` view becomes the first responder
+//!   (`canBecomeFirstResponder`) and a UIKit focus item
+//!   (`canBecomeFocused`), reports one `on_key_down` / `on_key_up` per
+//!   `UIPress` transition with the HID usage, the character UIKit reports
+//!   for the press (case and layout included; the unmodified character only
+//!   for nonprinting control chords) and its modifier flags, and gives up
+//!   keys its mounted `capture_keys` rule captures. Tab and Shift+Tab move
+//!   the focus between inputs and focusable views: a mounted Tab capture
+//!   becomes a prioritized `UIKeyCommand` (its `KeyDown` has no HID usage or
+//!   release), app shortcuts run first, and an uncaptured Tab follows normal
+//!   traversal (UIKit's focus engine from no focus). Return and Space press
+//!   a focused view that takes presses. App shortcuts (`nsh/keymap`) keep
+//!   their precedence, and focused native inputs, web views and native
+//!   components keep their own keys. UIKit reports no key auto-repeat, so
+//!   `repeat` is false; blur, cancellation and deactivation forget held keys
+//!   without synthesizing a release (`keyboard.rs`).
 //! - [`embed`] (feature `embed`) is the C ABI of the `NativeShell` Swift
 //!   module (`swift/`) that iOS apps embed nsh with.
 //!
 //! On non-UIKit targets this crate is empty.
+//!
+//! # Hardware keyboard tests
+//!
+//! With Xcode's simulator, the regression app presses real IOHID keys:
+//!
+//! ```sh
+//! nsh test crates/nsh-platform-ios/tests/keyboard --target ios
+//! nsh test crates/nsh-platform-ios/tests/keyboard --target catalyst
+//! ```
+//!
+//! It checks the reported key, text preview, HID usage and non-repeat of a
+//! focusable view, a mounted capture taking a key before its default, and
+//! Tab / Shift+Tab traversal (a captured Tab stays). On a device or the
+//! simulator, a connected hardware keyboard (or "Connect Hardware
+//! Keyboard") exercises the same path. UIKit sends a held key's press
+//! once and reports no auto-repeat, so `repeat` is false and an app that
+//! wants repeats starts its own timer from the press.
 
 #![cfg(target_os = "ios")]
 
@@ -32,6 +65,7 @@ mod fps;
 mod image;
 mod input;
 mod interaction;
+mod keyboard;
 mod keymap;
 mod mount;
 mod native_view;

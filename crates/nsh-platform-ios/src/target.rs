@@ -4,7 +4,7 @@
 
 use dispatch2::{DispatchQueue, MainThreadBound};
 use nsh_core::{
-    EventKind, EventPayload, KeyboardTaps, NodeId, SubmitBehavior,
+    EventKind, EventMask, EventPayload, KeyboardTaps, NodeId, SubmitBehavior,
     geometry::{point, px},
 };
 use nsh_engine::EngineControl;
@@ -37,6 +37,8 @@ pub(crate) struct TargetIvars {
     scrolls_applied: std::cell::RefCell<rustc_hash::FxHashMap<NodeId, u32>>,
     /// The app's keyboard shortcuts, matched as keys are pressed.
     keymap: crate::keymap::KeymapState,
+    /// Hardware keys a focused custom view holds and its modifiers.
+    keyboard: crate::keyboard::Keyboard,
     /// The scroll views of the surface the embedding app may watch
     /// ([`crate::scroll_watch`]).
     scrolls: crate::scroll_watch::SurfaceScrolls,
@@ -562,6 +564,7 @@ impl EventTarget {
             mounter,
             scrolls_applied: Default::default(),
             keymap: Default::default(),
+            keyboard: Default::default(),
             scrolls,
             held: Default::default(),
             tap_start: Default::default(),
@@ -602,6 +605,42 @@ impl EventTarget {
     /// The app's keyboard shortcuts.
     pub(crate) fn keymap(&self) -> &crate::keymap::KeymapState {
         &self.ivars().keymap
+    }
+
+    /// The hardware keys a focused custom view holds, and its modifiers.
+    pub(crate) fn keyboard(&self) -> &crate::keyboard::Keyboard {
+        &self.ivars().keyboard
+    }
+
+    /// The keyboard focus entered or left custom view `id`: the view's
+    /// `FOCUSED` state and its `onFocus` / `onBlur` event. A loss forgets
+    /// the keys held there, without inventing their releases.
+    pub(crate) fn view_focused(&self, id: NodeId, focused: bool, events: EventMask) {
+        if !focused {
+            self.ivars().keyboard.clear();
+        }
+        self.with_mounter(move |m| m.view_focused(id, focused));
+        let kind = if focused {
+            EventKind::Focus
+        } else {
+            EventKind::Blur
+        };
+        if events.contains(kind) {
+            self.dispatch(id, kind, EventPayload::None);
+        }
+    }
+
+    /// The native view whose subtree Tab walks from `view`: the modal view
+    /// it is in, else the surface's root view, so a Tab never reaches the
+    /// stops a presented modal covers. `None` when neither is known (the
+    /// caller falls back to the window).
+    pub(crate) fn focus_scope(&self, view: &crate::native_view::NshView) -> Option<Retained<UIView>> {
+        let mtm = self.mtm();
+        let scope = match self.ivars().mounter.get(mtm).try_borrow() {
+            Ok(m) => m.as_ref().and_then(|m| m.focus_scope(view)),
+            Err(_) => None,
+        };
+        scope.or_else(|| view.window().map(|w| Retained::into_super(w)))
     }
 
     pub(crate) fn dispatch(&self, id: NodeId, event: EventKind, payload: EventPayload) {
