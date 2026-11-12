@@ -49,6 +49,8 @@ use nsh_core::{
     keymap::{Key, Keystroke},
 };
 use rustc_hash::FxHashMap;
+#[cfg(test)]
+use windows::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState;
 use windows::Win32::UI::{
     Input::KeyboardAndMouse::{
         GetFocus, GetKeyState, GetKeyboardLayout, GetKeyboardState, HKL, MAPVK_VK_TO_CHAR,
@@ -56,8 +58,6 @@ use windows::Win32::UI::{
     },
     WindowsAndMessaging::{MSG, WM_KEYDOWN, WM_SYSKEYDOWN},
 };
-#[cfg(test)]
-use windows::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState;
 
 use crate::{app_window::window_of, input::KeyEvent, surface::Surface, view::NshView};
 
@@ -840,7 +840,13 @@ mod tests {
         let view = surface.view(id).expect("the view");
         let mut props: ViewProps = (*view.state().props).clone();
         props.focusable = Some(true);
-        apply(surface, &[MountItem::ViewProps { id, props: Box::new(props) }]);
+        apply(
+            surface,
+            &[MountItem::ViewProps {
+                id,
+                props: Box::new(props),
+            }],
+        );
         view
     }
 
@@ -1070,7 +1076,13 @@ mod tests {
         let view = surface.view(id).expect("the view");
         let mut props: ViewProps = (*view.state().props).clone();
         props.focusable = focusable.then_some(true);
-        apply(surface, &[MountItem::ViewProps { id, props: Box::new(props) }]);
+        apply(
+            surface,
+            &[MountItem::ViewProps {
+                id,
+                props: Box::new(props),
+            }],
+        );
         view
     }
 
@@ -1157,12 +1169,24 @@ mod tests {
         crate::navigation::present(&surface, &dialog);
         let mut props: ViewProps = (*view.state().props).clone();
         props.accessibility.state.disabled = true;
-        apply(&surface, &[MountItem::ViewProps { id: 2, props: Box::new(props) }]);
+        apply(
+            &surface,
+            &[MountItem::ViewProps {
+                id: 2,
+                props: Box::new(props),
+            }],
+        );
         crate::navigation::dismiss(&surface, &dialog);
         assert!(focused_in(&surface, ROOT_ID).is_none());
         let mut props: ViewProps = (*view.state().props).clone();
         props.accessibility.state.disabled = false;
-        apply(&surface, &[MountItem::ViewProps { id: 2, props: Box::new(props) }]);
+        apply(
+            &surface,
+            &[MountItem::ViewProps {
+                id: 2,
+                props: Box::new(props),
+            }],
+        );
         assert!(focus_control(&surface, &view));
         let dialog = modal(&surface, 8);
         crate::navigation::present(&surface, &dialog);

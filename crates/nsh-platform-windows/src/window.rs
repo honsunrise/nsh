@@ -2292,7 +2292,13 @@ mod tests {
             let mut props: nsh_core::ViewProps = (*view.state().props).clone();
             props.focusable = Some(true);
             props.key_capture = capture;
-            apply(&surface, &[MountItem::ViewProps { id: 2, props: Box::new(props) }]);
+            apply(
+                &surface,
+                &[MountItem::ViewProps {
+                    id: 2,
+                    props: Box::new(props),
+                }],
+            );
         };
         set_capture(KeyCapture::All);
         assert!(crate::keyboard::focus_control(&surface, &view));
@@ -2370,7 +2376,13 @@ mod tests {
         let mut props: nsh_core::ViewProps = (*view.state().props).clone();
         props.focusable = Some(true);
         props.key_capture = KeyCapture::All;
-        apply(&surface, &[MountItem::ViewProps { id: 2, props: Box::new(props) }]);
+        apply(
+            &surface,
+            &[MountItem::ViewProps {
+                id: 2,
+                props: Box::new(props),
+            }],
+        );
         assert!(crate::keyboard::focus_control(&surface, &view));
         drain_messages(hwnd);
         // The key, then a character and a wake (an engine/focus update)
@@ -2445,7 +2457,13 @@ mod tests {
             let mut props: nsh_core::ViewProps = (*view.state().props).clone();
             props.focusable = Some(true);
             props.key_capture = capture;
-            apply(&surface, &[MountItem::ViewProps { id: 2, props: Box::new(props) }]);
+            apply(
+                &surface,
+                &[MountItem::ViewProps {
+                    id: 2,
+                    props: Box::new(props),
+                }],
+            );
         };
         set_capture(KeyCapture::All);
         assert!(crate::keyboard::focus_control(&surface, &view));
