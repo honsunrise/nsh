@@ -17,8 +17,10 @@
 //! non-Latin layouts), so a captured key is one the app can also bind.
 //!
 //! Capture rules ([`nsh_core::KeyCapture`]) are read from the mounted
-//! props of the focused view and its enabled ancestors, before the native
-//! defaults of [`crate::input::key`] (the application menu, a focused
+//! props of the focused view and its enabled ancestors — walking
+//! [`nsh_core::ViewProps::key_parent`] when core set one for a view a
+//! native surface portals at a root it does not logically live under —
+//! before the native defaults of [`crate::input::key`] (the application menu, a focused
 //! field's editing, navigation, scrolling, Tab's traversal). A captured
 //! key is still reported, with `captured` set, and runs none of those
 //! defaults. A captured key is never translated into characters:
@@ -118,49 +120,69 @@ fn window_root(surface: &Surface, view: &NshView) -> bool {
     view.kind() == ViewKind::Modal && crate::app_window::is_window(surface, view.id())
 }
 
-/// Whether `view` or an ancestor within its window hears `KeyDown` /
-/// `KeyUp` or captures keys. A view that does neither takes the original
-/// path of [`crate::input::key`], with no event built.
-pub(crate) fn listens(surface: &Surface, view: &NshView) -> bool {
+/// Walks `view` and its keyboard ancestry within its native window, with
+/// `f` deciding; true when `f` does.
+///
+/// The next ancestor is [`nsh_core::ViewProps::key_parent`] when core set
+/// one — a view a native surface portals at a root it does not logically
+/// live under (an `Overlay`): the mounted parent there is not proof of
+/// logical ancestry — and the mounted parent otherwise. The walk ends
+/// after the root of a window of the app's own: keys do not cross native
+/// windows. Ordinary focus, hit testing and layout keep their mounted
+/// parents; only this interest/capture walk follows the override.
+fn walk_keyboard(
+    surface: &Surface,
+    view: &NshView,
+    mut f: impl FnMut(&NshView) -> bool,
+) -> bool {
+    let window = window_of(surface, view);
     let mut current = Some(view.clone());
-    while let Some(view) = current {
-        let heard = {
-            let state = view.state();
-            state.events.contains(EventKind::KeyDown)
-                || state.events.contains(EventKind::KeyUp)
-                || !state.props.key_capture.is_none()
+    // Bounded: a routing override is core's, but a broken one must not hang
+    // the window.
+    for _ in 0..1024 {
+        let Some(view) = current else {
+            return false;
         };
-        if heard {
+        if f(&view) {
             return true;
         }
         if window_root(surface, &view) {
             return false;
         }
-        current = view.parent_view();
+        let logical = view
+            .state()
+            .props
+            .key_parent
+            .and_then(|id| surface.view(id))
+            // A native window is a keyboard boundary even across a
+            // routing override.
+            .filter(|parent| window_of(surface, parent) == window);
+        current = logical.or_else(|| view.parent_view());
     }
     false
 }
 
-/// Whether the focused `view` or one of its enabled ancestors captures the
-/// key of `stroke` (`capture_keys`; [`nsh_core::KeyCapture`]). Disabled
-/// views and the views outside the window capture nothing.
+/// Whether `view` or a keyboard ancestor within its window hears
+/// `KeyDown` / `KeyUp` or captures keys. A view that does neither takes
+/// the original path of [`crate::input::key`], with no event built.
+pub(crate) fn listens(surface: &Surface, view: &NshView) -> bool {
+    walk_keyboard(surface, view, |view| {
+        let state = view.state();
+        state.events.contains(EventKind::KeyDown)
+            || state.events.contains(EventKind::KeyUp)
+            || !state.props.key_capture.is_none()
+    })
+}
+
+/// Whether the focused `view` or one of its enabled keyboard ancestors
+/// captures the key of `stroke` (`capture_keys`;
+/// [`nsh_core::KeyCapture`]). Disabled views and the views outside the
+/// window capture nothing.
 pub(crate) fn captures(surface: &Surface, view: &NshView, stroke: Option<&Keystroke>) -> bool {
-    let mut current = Some(view.clone());
-    while let Some(view) = current {
-        let captured = {
-            let state = view.state();
-            !state.props.accessibility.state.disabled
-                && state.props.key_capture.captures_key(stroke)
-        };
-        if captured {
-            return true;
-        }
-        if window_root(surface, &view) {
-            return false;
-        }
-        current = view.parent_view();
-    }
-    false
+    walk_keyboard(surface, view, |view| {
+        let state = view.state();
+        !state.props.accessibility.state.disabled && state.props.key_capture.captures_key(stroke)
+    })
 }
 
 /// The focused custom view of window `window`, if it is still a stop
@@ -1012,6 +1034,92 @@ mod tests {
             },
         );
         view
+    }
+
+    /// A view `id` under `parent`.
+    fn under(
+        surface: &std::rc::Rc<Surface>,
+        parent: NodeId,
+        id: NodeId,
+        focusable: bool,
+    ) -> NshView {
+        apply(
+            surface,
+            &[
+                MountItem::Create {
+                    id,
+                    kind: ViewKind::View,
+                },
+                MountItem::Insert {
+                    parent,
+                    child: id,
+                    before: None,
+                },
+                MountItem::Frame {
+                    id,
+                    frame: rect(0.0, 0.0, 100.0, 40.0),
+                },
+            ],
+        );
+        let view = surface.view(id).expect("the view");
+        let mut props: ViewProps = view.state().props.clone();
+        props.focusable = focusable.then_some(true);
+        apply(surface, &[MountItem::ViewProps { id, props }]);
+        view
+    }
+
+    /// A view a native surface mounted at a root it does not logically live
+    /// under (an `Overlay`, portaled by core) follows `key_parent` for its
+    /// keyboard interest and capture: only its logical ancestors count, not
+    /// the mounted parent or a sibling portal's views.
+    #[test]
+    fn a_portaled_views_keys_follow_its_logical_ancestors() {
+        let surface = surface();
+        // The logical ancestor, not the root, hears keys and captures one.
+        let ancestor = under(&surface, ROOT_ID, 2, false);
+        let mut mask = EventMask::default();
+        mask.set(EventKind::KeyDown, true);
+        apply(&surface, &[MountItem::Events { id: 2, events: mask }]);
+        let escape = stroke("escape");
+        let mut props = ancestor.state().props.clone();
+        props.key_capture = nsh_core::KeyCapture::keys([escape]);
+        apply(&surface, &[MountItem::ViewProps { id: 2, props }]);
+        // The portal: mounted at the root, logically under the ancestor.
+        let portal = under(&surface, ROOT_ID, 4, false);
+        let mut props = portal.state().props.clone();
+        props.key_parent = Some(2);
+        apply(&surface, &[MountItem::ViewProps { id: 4, props }]);
+        let child = under(&surface, 4, 6, true);
+        assert_eq!(
+            portal.parent_view().map(|view| view.id()),
+            Some(ROOT_ID),
+            "the mounted parent is the root, not the logical one"
+        );
+        assert!(focus_control(&surface, &child));
+        assert!(
+            listens(&surface, &child),
+            "the logical ancestor's listener is heard"
+        );
+        assert!(
+            captures(&surface, &child, Some(&escape)),
+            "the logical ancestor captures"
+        );
+        assert!(press(&surface, &key(0x1B)));
+        // The raw payload keeps the source's key and physical code.
+        let reported = core_event(&key(0x1B), true, true);
+        assert_eq!(reported.key.as_str(), "Escape");
+        assert!(reported.text.is_none());
+        assert!(reported.captured);
+        assert!(reported.physical.is_none());
+        // An unrelated sibling portal has no such ancestor: nothing is
+        // heard or captured, and a key there is not consumed.
+        let sibling = under(&surface, ROOT_ID, 8, false);
+        let other = under(&surface, 8, 10, true);
+        assert!(sibling.parent_view().is_some());
+        assert!(!listens(&surface, &other));
+        assert!(!captures(&surface, &other, Some(&escape)));
+        assert!(focus_control(&surface, &other));
+        assert!(!press(&surface, &key(0x1B)));
     }
 
     #[test]
