@@ -278,7 +278,11 @@ app), finds the window whose `AppView` shows the surface, and acts through the h
 (`synth.rs`): a press is a mouse down and up at the view's middle (the window's view focused first), a scroll precise
 touchpad events a frame apart, typing `text_input::char_input`, select all the platform's command key with A, back
 the mouse's back button (it goes back from wherever the focus is), a dialog's answer a click at its button's laid-out
-middle (`system::dialog_point`), a screenshot `synth::frame` as a PNG. A view's bounds are its frame's corners through
+middle (`system::dialog_point`), a screenshot `synth::frame` as a PNG. A key step (`app.press("mod+k")`,
+`app.press("shift+/")`) is a source key as GPUI's own are (`synth::press_keys`): the requested keystroke builds the
+raw key (`physical` is `None`) and the press and release go through the window's key router
+(`input::window_key`), so `onKeyDown`/`onKeyUp` and `captureKeys` are exercised; the agent's programmatic keys
+(select all, a typed line's Return, clear) are the platform's action and send no raw event. A view's bounds are its frame's corners through
 `NshView::to_root`. `dev.rs` hands the test session's model to the surface through the session's own messages, so it
 comes before the first bundle.
 

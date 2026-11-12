@@ -4015,6 +4015,51 @@ mod tests {
         assert!(press(&surface, 0, true, question()));
     }
 
+    /// `nsh test --target gpui`'s key step reaches the raw path: the
+    /// explicit keystroke is the source, so bindings and capture decide it
+    /// as they do a window's own keys.
+    #[cfg(feature = "dev")]
+    #[test]
+    fn a_test_steps_key_goes_through_the_raw_router() {
+        use std::sync::Arc;
+
+        use nsh_core::keymap::{KeyBinding, Keymap, Keystroke, When};
+
+        let (surface, focused) = focused_surface();
+        let shift_slash = Keystroke::parse_with("shift+/", false).unwrap();
+        // Nothing takes it: the step's key goes on.
+        assert!(!crate::synth::press_keys(&surface, &shift_slash));
+        // The focus captures it, through the same raw notification real
+        // keys send.
+        focused.state_mut().props.key_capture = nsh_core::KeyCapture::All;
+        assert!(crate::synth::press_keys(&surface, &shift_slash));
+        // A passing binding leaves it to capture, a consuming one takes it
+        // first.
+        crate::keymap::forget_held(&surface);
+        crate::keymap::set(
+            &surface,
+            Arc::new(Keymap::new(vec![
+                KeyBinding::new(1, shift_slash, When::Auto, false).passing_through(true),
+            ])),
+        );
+        focused.state_mut().props.key_capture = nsh_core::KeyCapture::None;
+        assert!(!crate::synth::press_keys(&surface, &shift_slash));
+        focused.state_mut().props.key_capture = nsh_core::KeyCapture::All;
+        assert!(crate::synth::press_keys(&surface, &shift_slash));
+        crate::keymap::forget_held(&surface);
+        crate::keymap::set(
+            &surface,
+            Arc::new(Keymap::new(vec![KeyBinding::new(
+                2,
+                shift_slash,
+                When::Auto,
+                false,
+            )])),
+        );
+        focused.state_mut().props.key_capture = nsh_core::KeyCapture::None;
+        assert!(crate::synth::press_keys(&surface, &shift_slash));
+    }
+
     #[test]
     fn only_a_focused_view_that_hears_or_captures_builds_raw_keys() {
         let (surface, focused) = focused_surface();
