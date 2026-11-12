@@ -665,16 +665,23 @@ test("Return and Space press the focused control unless the focus binds them", (
   assert.deepEqual(fired, [7, 7, 7, 7, 9]);
 });
 
-/** A player whose shortcut match answers -1 and whose core key answer is
- * `capture`; `keys` holds what `nsh_key_event` received, with its strings. */
-function keyPlayer(capture = () => false) {
+/** A player whose core answers are `interest` — whether the focused view's
+ * logical ancestry hears or captures keys — and `capture` — whether this
+ * transition is taken. `calls` keeps the canonical stroke and direction of
+ * the transitions that reached the engine; `asked` counts interest queries. */
+function keyPlayer({ interest = () => true, capture = () => false } = {}) {
   const { player } = fakePlayer();
-  const keys = [];
+  const calls = [];
+  let asked = 0;
   let last = false;
   player.wasm.nsh_key = () => -1;
-  player.wasm.nsh_key_event = (id, down, key, keyLen, text, textLen, physical, physicalLen, modifiers, repeat) => {
-    keys.push({ id, down, key, text, physical, modifiers, repeat });
-    last = capture(keys[keys.length - 1]);
+  player.wasm.nsh_key_interest = () => {
+    asked++;
+    return interest() ? 1 : 0;
+  };
+  player.wasm.nsh_key_event = (id, down, stroke, key, keyLen, text, textLen, physical, physicalLen, modifiers, repeat) => {
+    calls.push({ id, down, stroke, modifiers });
+    last = capture(calls[calls.length - 1]);
     return -1;
   };
   player.wasm.nsh_key_captured = () => (last ? 1 : 0);
@@ -685,143 +692,163 @@ function keyPlayer(capture = () => false) {
   player.selectionKey = () => false;
   player.scrollKey = () => false;
   player.back = () => false;
-  player.pressIn = () => {};
+  player.pressIn = (p) => {
+    p.pressed = true;
+  };
   player.pressOut = () => {};
   player.setState = () => {};
-  return { player, keys };
+  return { player, calls, asked: () => asked };
 }
 
-/** A focused view of `events`/`props` under the player's root. */
-function keyFocus(player, events = [], props = {}) {
+/** A focused view of `events` under the player's root. */
+function keyFocus(player, events = []) {
   const view = {
     _id: 7,
     _events: new Set(events),
-    _props: props,
+    _props: {},
     closest: () => null,
   };
   const root = { _id: 1, _events: new Set(), parentNode: null, contains: (el) => el === view };
   player.root = root;
   player.viewOf = () => view;
-  const ancestors = (el) => (el === root ? [root] : [el, root]);
-  player.ancestors = ancestors;
+  player.ancestors = (el) => (el === root ? [root] : [el, root]);
   globalThis.document = { activeElement: view, body: {} };
   return view;
 }
 
-test("a focused view hears the browser's own key and physical code before the defaults", () => {
-  const { player, keys } = keyPlayer();
-  keyFocus(player, ["onKeyDown", "onKeyUp"]);
-  let prevented = false;
-  player.keyDown({
-    key: "A", code: "KeyA", shiftKey: true, ctrlKey: false, altKey: false, metaKey: false,
-    repeat: false, isComposing: false, preventDefault() { prevented = true; }, stopPropagation() {},
-  });
+test("the core's logical interest decides whether a key becomes an event", () => {
+  const { player, calls, asked } = keyPlayer({ interest: () => false });
+  // A DOM listener is not the logical tree's answer: an overlay's ancestors
+  // are not its DOM ones.
+  keyFocus(player, ["onKeyDown"]);
   try {
-    // The actual reported logical key and case, and the DOM code: not a
-    // US-layout character guessed from it.
-    assert.equal(prevented, false, "an uncaptured key leaves the browser's default");
-    assert.deepEqual(keys, [
-      { id: 7, down: 1, key: "A", text: "A", physical: "KeyA", modifiers: 4, repeat: 0 },
-    ]);
-    player.keyUp({
-      key: "A", code: "KeyA", shiftKey: true, ctrlKey: false, altKey: false, metaKey: false,
-      repeat: false, isComposing: false, preventDefault() {}, stopPropagation() {},
-    });
-    // A release types nothing, and its capture is decided anew.
-    assert.deepEqual(keys[1], { id: 7, down: 0, key: "A", text: "", physical: "KeyA", modifiers: 4, repeat: 0 });
-    // A key outside the US layout keeps what the browser reported.
-    keys.length = 0;
-    player.keyDown({
-      key: "é", code: "KeyE", ctrlKey: true, altKey: false, shiftKey: false, metaKey: false,
-      preventDefault() {}, stopPropagation() {},
-    });
-    assert.deepEqual(keys, [
-      { id: 7, down: 1, key: "é", text: "", physical: "KeyE", modifiers: 1, repeat: 0 },
-    ]);
-    // An event without a key or code reports the DOM's unidentified key and
-    // no physical one, rather than a fabricated integer.
-    keys.length = 0;
-    player.keyDown({ preventDefault() {}, stopPropagation() {} });
-    assert.deepEqual(keys, [
-      { id: 7, down: 1, key: "Unidentified", text: "", physical: "", modifiers: 0, repeat: 0 },
+    player.keyDown({ key: "a", code: "KeyA", preventDefault() {}, stopPropagation() {} });
+    player.keyUp({ key: "a", code: "KeyA", preventDefault() {}, stopPropagation() {} });
+    assert.equal(asked(), 2, "each transition asks the core once");
+    assert.deepEqual(calls, [], "nothing interested builds no KeyEvent");
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test("an interested view hears each transition once, an uncaptured key leaving the default", () => {
+  const { player, calls } = keyPlayer();
+  keyFocus(player, []);
+  try {
+    let prevented = false;
+    player.keyDown({ key: "End", code: "Numpad1", preventDefault() { prevented = true; }, stopPropagation() {} });
+    player.keyUp({ key: "End", code: "Numpad1", preventDefault() {}, stopPropagation() {} });
+    assert.equal(prevented, false);
+    // One transition, not one call per DOM ancestor.
+    assert.deepEqual(calls.map((c) => [c.id, c.down]), [[7, 1], [7, 0]]);
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test("capture matches the shortcut key the page reports, not the physical code's US character", () => {
+  const { player, calls } = keyPlayer();
+  keyFocus(player, []);
+  try {
+    // AZERTY: `z` types z on the KeyW position.
+    player.keyDown({ key: "z", code: "KeyW", preventDefault() {}, stopPropagation() {} });
+    // A named key with an unrelated code stays that named key.
+    player.keyDown({ key: "End", code: "Numpad1", preventDefault() {}, stopPropagation() {} });
+    // Shift+/ still names `/` (with Shift), as the keymap does.
+    player.keyDown({ key: "?", code: "Slash", shiftKey: true, preventDefault() {}, stopPropagation() {} });
+    assert.deepEqual(calls.map((c) => [c.stroke, c.modifiers]), [
+      [keyCode({ key: "z", code: "KeyW" }), 0],
+      [keyCode({ key: "End", code: "Numpad1" }), 0],
+      [keyCode({ key: "?", code: "Slash", shiftKey: true }), 4],
     ]);
   } finally {
     delete globalThis.document;
   }
 });
 
-test("a mounted capture takes the key before the browser's default and the control press", () => {
-  const { player, keys } = keyPlayer((k) => k.key === "Tab" || k.key === " ");
-  const view = keyFocus(player, ["onKeyDown", "onKeyUp"]);
+test("a captured key takes the default and never presses the focused control", () => {
+  const { player, calls } = keyPlayer({ capture: () => true });
+  const view = keyFocus(player, []);
   view._pressable = true;
   const pressed = [];
-  player.pressIn = (p) => pressed.push(p.press);
-  let prevented = false;
-  player.keyDown({ key: "Tab", code: "Tab", preventDefault() { prevented = true; }, stopPropagation() {} });
+  player.pressIn = (p) => {
+    p.pressed = true;
+    pressed.push(p.press);
+  };
   try {
-    assert.equal(keys.length, 1);
-    assert.equal(prevented, true, "a captured Tab is no browser traversal");
-    // Space is captured too: it never arms the focused control's press.
-    player.keyDown({ key: " ", code: "Space", preventDefault() {}, stopPropagation() {} });
-    assert.deepEqual(pressed, [], "a captured Space presses nothing");
+    let prevented = false, stopped = false;
+    player.keyDown({ key: " ", code: "Space", preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(pressed, [], "a captured Space arms nothing");
     assert.equal(player.keyPress, undefined);
-    // The release is still reported, with this transition's own answer.
-    player.keyUp({ key: " ", code: "Space", preventDefault() {}, stopPropagation() {} });
-    assert.deepEqual(keys[2], {
-      id: 7, down: 0, key: " ", text: "", physical: "Space", modifiers: 0, repeat: 0,
-    });
-  } finally {
-    delete globalThis.document;
-  }
-});
-
-test("a capture mounted on an ancestor takes the key too", () => {
-  const { player, keys } = keyPlayer(() => true);
-  const view = keyFocus(player, []);
-  player.root._props = { capturesKeys: true };
-  player.ancestors = (el) => [el, player.root];
-  let prevented = false;
-  player.keyDown({ key: "Escape", code: "Escape", preventDefault() { prevented = true; }, stopPropagation() {} });
-  try {
-    assert.equal(keys.length, 1);
-    assert.equal(keys[0].key, "Escape");
     assert.equal(prevented, true);
-    assert.equal(view._events.size, 0);
+    assert.equal(stopped, true);
   } finally {
     delete globalThis.document;
   }
 });
 
-test("ordinary views and native inputs keep the fast path, and shortcuts come first", () => {
-  const { player, keys } = keyPlayer(() => true);
-  // No listener and no capture: the key never crosses to the core.
-  keyFocus(player, []);
-  player.keyDown({ key: "a", code: "KeyA", preventDefault() {}, stopPropagation() {} });
+test("a captured release cancels the press an uncaptured Space armed", () => {
+  // Space with no Shift is not captured; the release with Shift is.
+  const { player, calls } = keyPlayer({ capture: (c) => c.down === 0 && (c.modifiers & 4) !== 0 });
+  const view = keyFocus(player, []);
+  view._pressable = true;
+  view._tracked = 1;
+  const pressed = [];
+  const states = [];
+  player.pressIn = (p) => {
+    p.pressed = true;
+    pressed.push("in");
+  };
+  player.pressOut = (p, inside) => pressed.push(inside ? "out" : "cancel");
+  player.setState = (el, bit, on) => states.push(on);
   try {
-    assert.deepEqual(keys, []);
-    // A native field owns its keys, even with a listener around it.
-    const view = keyFocus(player, ["onKeyDown"]);
+    player.keyDown({ key: " ", code: "Space", preventDefault() {}, stopPropagation() {} });
+    assert.deepEqual(pressed, ["in"]);
+    assert.notEqual(player.keyPress, undefined);
+    let prevented = false;
+    player.keyUp({ key: " ", code: "Space", shiftKey: true, preventDefault() { prevented = true; }, stopPropagation() {} });
+    assert.equal(prevented, true, "the captured release is consumed");
+    assert.equal(player.keyPress, null);
+    assert.deepEqual(pressed, ["in", "cancel"], "no onPress");
+    assert.deepEqual(states, [true, false], "the pressed state clears");
+    // A plain release still activates.
+    player.keyDown({ key: " ", code: "Space", preventDefault() {}, stopPropagation() {} });
+    player.keyUp({ key: " ", code: "Space", preventDefault() {}, stopPropagation() {} });
+    assert.deepEqual(pressed, ["in", "cancel", "in", "out"]);
+    assert.deepEqual(calls.map((c) => c.down), [1, 0, 1, 0]);
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test("native editors keep their keys, and shortcuts come before raw events", () => {
+  const { player, calls, asked } = keyPlayer({ capture: () => true });
+  const view = keyFocus(player, ["onKeyDown"]);
+  try {
     view.closest = (selector) => (selector.includes("nsh-field") ? view : null);
     player.keyDown({ key: "a", code: "KeyA", preventDefault() {}, stopPropagation() {} });
     player.keyUp({ key: "a", code: "KeyA", preventDefault() {}, stopPropagation() {} });
-    assert.deepEqual(keys, []);
+    assert.deepEqual(calls, []);
+    assert.equal(asked(), 0);
     // A contenteditable element is an editor's too.
     view.closest = () => null;
     view.isContentEditable = true;
     player.keyDown({ key: "a", code: "KeyA", preventDefault() {}, stopPropagation() {} });
     player.keyUp({ key: "a", code: "KeyA", preventDefault() {}, stopPropagation() {} });
-    assert.deepEqual(keys, []);
+    assert.deepEqual(calls, []);
     delete view.isContentEditable;
     // A composing key is the input method's, not a raw transition.
     player.keyDown({ key: "a", isComposing: true, preventDefault() {}, stopPropagation() {} });
-    assert.deepEqual(keys, []);
+    assert.deepEqual(calls, []);
     // The app's shortcut takes the key before the raw notification.
     const fired = [];
     player.wasm.nsh_key = () => 5;
     player.wasm.nsh_key_command = (id) => fired.push(id);
     let prevented = false;
     player.keyDown({ key: "s", code: "KeyS", metaKey: true, preventDefault() { prevented = true; }, stopPropagation() {} });
-    assert.deepEqual(keys, []);
+    assert.deepEqual(calls, []);
+    assert.equal(asked(), 0);
     assert.deepEqual(fired, [5]);
     assert.equal(prevented, true);
   } finally {

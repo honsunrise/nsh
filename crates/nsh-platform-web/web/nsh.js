@@ -7819,16 +7819,13 @@ class Player {
     }
   }
 
-  /** Whether `view` or a view around it hears raw keys (`onKeyDown` /
-   * `onKeyUp`) or mounts a capture rule (`captureKeys`): only then does a
-   * key need the core's answer before the browser's defaults. A routing
-   * hint, not the policy: the core reads the mounted rules itself
-   * (`nsh_key_event`). */
-  keysTracked(view) {
-    for (const el of this.ancestors(view)) {
-      if (el._events?.has("onKeyDown") || el._events?.has("onKeyUp") || el._props?.capturesKeys) return true;
-    }
-    return false;
+  /** Whether `view` or an enabled logical ancestor hears raw keys
+   * (`onKeyDown` / `onKeyUp`) or captures them (`captureKeys`), from the
+   * core's own tree: an overlay's content is that tree's, whatever its DOM
+   * ancestry. Only then does a transition need a `KeyEvent`. Cheap, and
+   * without allocation. */
+  keyInterest(view) {
+    return this.wasm?.nsh_key_interest?.(view._id) > 0;
   }
 
   /**
@@ -7840,9 +7837,11 @@ class Player {
    * logical key (its actual case and layout) and `e.code` as its physical
    * one — never a US-layout guess; `text` is what the key types on this
    * press, and nothing for a release, a composing key or a
-   * Control/Alt/Command shortcut.
+   * Control/Alt/Command shortcut. `stroke` is the page's canonical
+   * shortcut key (`keyCode(e)`), the one `nsh_key` matches and
+   * `captureKeys` names: not a layout guess from the physical code.
    */
-  rawKey(view, down, e) {
+  rawKey(view, down, e, stroke) {
     if (!this.wasm?.nsh_key_event) return false;
     // An input method owns a composing key (some browsers report 229 rather
     // than `isComposing`): the raw key is not the app's.
@@ -7857,7 +7856,7 @@ class Player {
     // entry does; the capture answer of that transition comes separately.
     this.call(() => {
       const delay = this.withStrings([key, text, physical], (kp, kl, tp, tl, pp, pl) =>
-        this.wasm.nsh_key_event(view._id, down ? 1 : 0, kp, kl, tp, tl, pp, pl,
+        this.wasm.nsh_key_event(view._id, down ? 1 : 0, stroke, kp, kl, tp, tl, pp, pl,
           modifiers, e.repeat ? 1 : 0));
       captured = this.wasm.nsh_key_captured?.() > 0;
       return delay;
@@ -7915,11 +7914,13 @@ class Player {
     }
     if (e.defaultPrevented || e.isComposing) return;
     // A key the focus hears as a raw transition goes to the core with the
-    // browser's own logical key and physical code; a mounted capture rule
-    // (`captureKeys`) takes it before the browser's defaults, as the native
-    // backends do. Native fields, pages and videos keep their own keys.
+    // browser's own logical key and physical code, and its canonical
+    // shortcut stroke for `captureKeys`; a mounted capture rule takes it
+    // before the browser's defaults, as the native backends do. The core
+    // answers from its own logical tree (an overlay's ancestors included).
+    // Native fields, pages and videos keep their own keys.
     const keyView = this.keyFocusView();
-    if (keyView && this.keysTracked(keyView) && this.rawKey(keyView, true, e)) {
+    if (keyView && this.keyInterest(keyView) && this.rawKey(keyView, true, e, keyCode(e))) {
       e.preventDefault();
       e.stopPropagation();
       return;
@@ -7976,9 +7977,19 @@ class Player {
     // anew whether the mounted capture policy matches this transition
     // (`nsh_key_event`), as a browser delivers the release to whatever has
     // the focus now.
-    if (this.wasm && !e.isComposing) {
+    let captured = false;
+    if (this.wasm && !e.isComposing && e.keyCode !== 229) {
       const keyView = this.keyFocusView();
-      if (keyView && this.keysTracked(keyView)) this.rawKey(keyView, false, e);
+      if (keyView && this.keyInterest(keyView)) captured = this.rawKey(keyView, false, e, keyCode(e));
+    }
+    if (captured) {
+      e.preventDefault();
+      e.stopPropagation();
+      // A release the policy took cancels what an uncaptured press armed
+      // (Space down, Shift pressed, Space released): no onPress, and the
+      // pressed states clear. Another key's captured release leaves it.
+      if (e.key === " " && this.keyPress) this.keyPressEnd(false);
+      return;
     }
     if (e.key === " " && this.keyPress) this.keyPressEnd(true);
   }
