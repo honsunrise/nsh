@@ -253,7 +253,13 @@ impl Headless {
                     break 'defaults;
                 }
                 if let Some(input) = self.screen.focused() {
+                    let multiline = self.screen.input(input).is_some_and(|i| i.config.multiline);
                     match stroke.key {
+                        keymap::Key::Enter
+                            if multiline && (m.shift || m.alt) && !(m.ctrl || m.cmd) =>
+                        {
+                            self.key(input, '\n');
+                        }
                         keymap::Key::Enter if plain => self.return_key(input),
                         keymap::Key::Backspace if plain => self.backspace(input),
                         keymap::Key::Char(c) if plain => {
