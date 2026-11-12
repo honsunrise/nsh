@@ -1905,6 +1905,10 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
     /// enabled ancestors. It returns that decision, so an in-process host
     /// (a browser page) can consume the key before its default runs.
     ///
+    /// `stroke` is the adapter's own canonical shortcut stroke for this
+    /// transition (what its existing shortcut matcher uses); capture
+    /// matching uses it as is, never the event's physical code. `None`: a
+    /// key no shortcut names, which only `KeyCapture::All` captures.
     /// `payload` should be [`EventPayload::Key`]; any other payload is
     /// routed unchanged and the answer is false.
     pub fn key_event(
@@ -1912,18 +1916,31 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
         id: NodeId,
         kind: EventKind,
         mut payload: EventPayload,
+        stroke: Option<nsh_core::keymap::Keystroke>,
     ) -> bool {
         let _clock = self.driver.clock.enter();
         let _context = self.driver.context.enter();
         let captured = match &mut payload {
             EventPayload::Key(event) => {
-                event.captured = self.driver.state.core.key_captured(id, event);
+                event.captured = self
+                    .driver
+                    .state
+                    .core
+                    .key_captured(id, stroke.as_ref());
                 event.captured
             }
             _ => false,
         };
         self.driver.handle(Message::Event(id, kind, payload), &self.rx);
         captured
+    }
+
+    /// Whether `id` has a key listener or a capture rule on itself or an
+    /// enabled logical ancestor up to its window root: an in-process host
+    /// calls it before building a key payload, so a portaled overlay's
+    /// logical ancestors are not missed. Heap free (one walk).
+    pub fn key_interest(&self, id: NodeId) -> bool {
+        self.driver.state.core.key_interest(id)
     }
 
     /// Handles the input sent since the last call, runs what is due
