@@ -217,6 +217,9 @@ pub(crate) struct KeyEvent {
     pub(crate) scan: u16,
     /// The key is an extended one (the message's extended bit).
     pub(crate) extended: bool,
+    /// It came as `WM_SYSKEYDOWN` / `WM_SYSKEYUP`: an Alt combination,
+    /// whose `TranslateMessage` character is a `WM_SYSCHAR`.
+    pub(crate) sys: bool,
 }
 
 /// The mouse cursor.

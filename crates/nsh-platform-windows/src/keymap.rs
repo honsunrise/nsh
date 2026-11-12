@@ -86,26 +86,6 @@ fn drop_char(surface: &Surface) {
     }
 }
 
-/// Removes up to `count` `WM_CHAR` messages queued for a captured key
-/// ([`crate::keyboard`]): the characters that key would have typed (a
-/// supplementary character is two UTF-16 units). A key that types nothing
-/// removes nothing, and nothing is remembered for the next key.
-pub(crate) fn drop_chars(surface: &Surface, count: usize) {
-    if count == 0 {
-        return;
-    }
-    let hwnd = keyboard_window(surface);
-    let mut msg = MSG::default();
-    for _ in 0..count {
-        // SAFETY: a plain call with a local out value, for a window of
-        // this thread.
-        let found = unsafe { PeekMessageW(&mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE) };
-        if !found.as_bool() {
-            return;
-        }
-    }
-}
-
 /// The window whose queue `TranslateMessage` queued the character in: the
 /// window that has the keyboard, else the surface's.
 fn keyboard_window(surface: &Surface) -> windows::Win32::Foundation::HWND {

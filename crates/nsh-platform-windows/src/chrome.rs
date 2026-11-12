@@ -1693,6 +1693,7 @@ fn choose(surface: &Rc<Surface>, id: u32, role: Option<MenuRole>, area: Option<&
                     },
                     scan: 0,
                     extended: false,
+                    sys: false,
                 },
             );
         }
@@ -2225,6 +2226,7 @@ mod tests {
                     },
                     scan: 0,
                     extended: false,
+                    sys: false,
                 },
             );
             let popup = surface.chrome.app_popup(Arc::from([]), None);

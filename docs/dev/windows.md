@@ -30,7 +30,7 @@ The keyboard tests process real messages (`TranslateMessage` / `DispatchMessageW
 
 ```sh
 cargo test -p nsh-platform-windows keyboard
-cargo test -p nsh-platform-windows a_captured_key_removes_only_its_own_character
+cargo test -p nsh-platform-windows a_captured_key_is_never_translated
 ```
 
 CI runs the crate's whole test binary on windows-latest (`.github/workflows/windows.yml`), which includes both;
@@ -186,7 +186,8 @@ server client, log forwarding, the error overlay: `dev.rs`). The host turns on `
 - **The app's shortcuts** (`nsh`'s `keymap`, `keymap.rs`; see "App shortcuts" below), then **the focused custom
   view's raw keys** (`keyboard.rs`; see "Hardware keys on custom views" below): its `KeyDown` is dispatched whatever
   its capture rules say, and a `capture_keys` rule of the view or its enabled ancestors consumes the key before
-  everything after this, its queued `WM_CHAR` removed.
+  everything after this. A consumed key was taken out of `TranslateMessage` before the loop translated it, so it
+  made no characters.
 - **The application menu's** shortcuts (`chrome::shortcut`, the editing roles excepted).
 - **The focused field** (`text_input.rs`): arrows (Ctrl: by word; Alt+Left / Right are left for navigation), Home /
   End (Ctrl: the text's edges), Up / Down and Page Up / Down in a multiline field, Backspace / Delete (Ctrl: a word),
@@ -232,12 +233,13 @@ ancestors within the same window:
 - `key` is the current layout's logical key as DOM's `KeyboardEvent.key` names it: DOM spellings for named keys
   (`Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `ArrowLeft`, `F5`, `Shift`, `Control`, `Alt`, `Meta`, ...), the
   character a printable key types in its actual case, with Shift and Caps Lock (a reported `é` stays `é`, never
-  forced onto a US key), and `"Unidentified"` for a dead key or a key the layout cannot name. A Control/Alt/Windows
-  combination reports the character the key is on, not the control character. A keypad key with Num Lock off is the
-  navigation key it is (or `Clear`, `Delete` for `5` and the decimal point). `text` previews the character the
-  modifiers name (`"A"` for Shift+A), never committed input-method text, and is `None` for non-printing keys,
-  Control/Alt/Windows combinations and releases; an AltGr combination (Windows reports it as Control+Alt) previews
-  nothing either, and its `key` is the base key.
+  forced onto a US key), and `"Unidentified"` for a dead key or a key the layout cannot name. The source's own
+  translation is used as it is: AltGr (Windows reports it as Control+Alt) keeps the character the layout provides
+  (`@` for AltGr+Q); only a Control/Alt combination that makes a control character (Ctrl+A's 0x01) falls back to the
+  key's own character (`a`). A keypad key with Num Lock off is the navigation key it is (or `Clear`, `Delete` for
+  `5` and the decimal point). `text` previews the character the modifiers name (`"A"` for Shift+A), never committed
+  input-method text, and is `None` for non-printing keys, Control/Alt/Windows combinations and releases (an AltGr
+  combination previews nothing, but its `key` is the layout's character).
 - `physical` is the message's scan code with `0x100` set for an extended key (`PhysicalKey::Native`; `None` when the
   message carries no scan code, as input injected as text does). `modifiers` are the keys held after the
   transition, `repeat` is the message's previous-key-state bit, and `captured` says whether a capture rule took
@@ -249,15 +251,21 @@ ancestors within the same window:
   shortcuts and every native default (Tab's traversal, Return/Space pressing, a context menu, scrolling); the
   app's keymap, the window's shortcuts (F11, the dev host's Ctrl+R) and the dialogs over the app keep their
   precedence. The event is still dispatched, with `captured` set.
-- The characters `TranslateMessage` queued for a captured key (`WM_CHAR`) are removed from the window's queue before
-  they are dispatched, so a capture types nothing; nothing is remembered afterwards, so a captured key that types no
-  character (an arrow, a modifier) removes nothing and the next key types as usual.
+- A captured key is not translated into characters at all: the thread's `WH_GETMESSAGE` hook (and the standalone
+  loop, should the hook be unavailable) asks `keyboard::suppress_translation` before `TranslateMessage`, and a
+  consumed key down becomes the private `WM_NSH_KEYDOWN` / `WM_NSH_SYSKEYDOWN`, which `TranslateMessage` ignores and
+  the window procedure handles as the key down it was. No `WM_CHAR` / `WM_SYSCHAR` is made, and the message queue is
+  never inspected, moved or restamped: a character queued before, around or after the key keeps its place and its
+  delivery. The hook is thread-scoped, so an embedding host's own message loop is covered without a DLL.
+- A modal presented over a window saves the custom view with the focus, as it saves a text field, and gives it back
+  when it closes if that view is still attached, enabled and shown in a window no modal covers.
 - The raw path is only for a focused custom view: a text field (`Input`, the system's RichEdit and IME) and a hosted
   web view or native component own their keys and text, and a capture on their ancestors does not intercept them. A
   view that is removed, concealed or disabled loses the focus (a `Blur`) without a synthetic key release; a real
   release the window gets is reported on whichever view has the focus then. `ToUnicodeEx` supplies the logical key
-  and preview from the current layout (never a US guess); a dead key's composition is committed through `WM_CHAR`
-  (and the IME), not previewed.
+  and preview from the current layout (never a US guess), always with its keyboard-state-not-changed flag (0x4), so a
+  dead key read for an event (also an AltGr-layer one) is never stored and the layout's pending composition is left
+  alone; a dead key's composition is committed through `WM_CHAR` (and the IME), not previewed.
 
 ## Checking a change: `nsh test --target windows`
 
