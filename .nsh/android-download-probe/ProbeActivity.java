@@ -32,6 +32,8 @@ public final class ProbeActivity extends Activity {
     private final BlockingQueue<String> blobs = new LinkedBlockingQueue<>();
     private final AtomicInteger once = new AtomicInteger();
     private final AtomicInteger post = new AtomicInteger();
+    private final AtomicInteger owned = new AtomicInteger();
+    private final BlockingQueue<InputStream> ownedStreams = new LinkedBlockingQueue<>();
     private ServerSocket server;
 
     private void note(String message) {
@@ -56,6 +58,22 @@ public final class ProbeActivity extends Activity {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 note("INTERCEPT method=" + request.getMethod() + " url=" + request.getUrl()
                         + " main=" + request.isForMainFrame() + " headers=" + request.getRequestHeaders().keySet());
+                if (request.getUrl().getPath().equals("/owned-once")) {
+                    try {
+                        final HttpURLConnection connection = (HttpURLConnection) new URL(request.getUrl().toString()).openConnection();
+                        connection.setConnectTimeout(10000);
+                        connection.setReadTimeout(10000);
+                        for (Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) connection.setRequestProperty(header.getKey(), header.getValue());
+                        note("OWNED_RESPONSE status=" + connection.getResponseCode() + " disposition=" + connection.getHeaderField("Content-Disposition"));
+                        ownedStreams.offer(new FilterInputStream(connection.getInputStream()) {
+                            @Override public void close() throws IOException { try { super.close(); } finally { connection.disconnect(); } }
+                        });
+                        return new WebResourceResponse("text/plain", "UTF-8", 204, "No Content", Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
+                    } catch (Exception error) {
+                        note("PROBE_ERROR interception-first: " + error);
+                        return new WebResourceResponse("text/plain", "UTF-8", 500, "Probe failure", Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
+                    }
+                }
                 return null;
             }
         });
@@ -95,6 +113,9 @@ public final class ProbeActivity extends Activity {
                         String extra = "", type = "application/octet-stream", body = "original-response";
                         if (path.equals("/once")) {
                             int count = once.incrementAndGet();
+                            if (count > 1) { status = 410; body = "already-consumed"; }
+                        } else if (path.equals("/owned-once")) {
+                            int count = owned.incrementAndGet();
                             if (count > 1) { status = 410; body = "already-consumed"; }
                         } else if (path.equals("/post")) {
                             post.incrementAndGet();
@@ -188,6 +209,19 @@ public final class ProbeActivity extends Activity {
                 runOnUiThread(() -> web.evaluateJavascript(script, null));
                 note("COOPERATIVE_BLOB " + blobs.poll(12, TimeUnit.SECONDS));
             }
+            runOnUiThread(() -> web.loadUrl(base + "/owned-once"));
+            InputStream response = ownedStreams.poll(12, TimeUnit.SECONDS);
+            if (response == null) throw new IOException("no intercepted native response");
+            File destination = new File(getFilesDir(), "owned-response.bin");
+            note("OWNED_PENDING destinationExists=" + destination.exists());
+            Thread.sleep(250);
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (InputStream input = response; FileOutputStream output = new FileOutputStream(destination)) {
+                byte[] buffer = new byte[1024];
+                int count;
+                while ((count = input.read(buffer)) != -1) { bytes.write(buffer, 0, count); output.write(buffer, 0, count); }
+            }
+            note("OWNED_ACCEPT requests=" + owned.get() + " bytes=" + bytes.size() + " exact=" + new String(bytes.toByteArray(), StandardCharsets.UTF_8).equals("original-response"));
         } catch (Exception error) { note("PROBE_ERROR " + error); }
         finally {
             try { if (server != null) server.close(); } catch (IOException ignored) {}
