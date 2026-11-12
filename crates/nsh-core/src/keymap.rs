@@ -276,6 +276,60 @@ impl Key {
         })
     }
 
+    /// The key of a Windows scan code (`code = scan | (extended << 8)`, as
+    /// `WM_KEYDOWN`'s LPARAM has it: bits 16–23 and the `0xE0` bit 24), by
+    /// the key's place on the US layout: what a shortcut matches on any
+    /// layout. The keypad's digits and Enter too; not the virtual key.
+    pub fn from_windows_scan_code(code: u16) -> Option<Key> {
+        let extended = code & 0x100 != 0;
+        let scan = code & 0xFF;
+        if extended {
+            return Some(match scan {
+                0x1C => Key::Enter,
+                0x47 => Key::Home,
+                0x48 => Key::Up,
+                0x49 => Key::PageUp,
+                0x4B => Key::Left,
+                0x4D => Key::Right,
+                0x4F => Key::End,
+                0x50 => Key::Down,
+                0x51 => Key::PageDown,
+                0x52 => Key::Insert,
+                0x53 => Key::Delete,
+                // Another layout's or a media key: the reported key names
+                // it.
+                _ => return None,
+            });
+        }
+        Some(match scan {
+            0x01 => Key::Escape,
+            0x0E => Key::Backspace,
+            0x0F => Key::Tab,
+            0x1C => Key::Enter,
+            0x39 => Key::Char(' '),
+            0x3B..=0x44 => Key::F((scan - 0x3A) as u8),
+            0x57 => Key::F(11),
+            0x58 => Key::F(12),
+            // The keypad's digits.
+            0x47 => Key::Char('7'),
+            0x48 => Key::Char('8'),
+            0x49 => Key::Char('9'),
+            0x4B => Key::Char('4'),
+            0x4C => Key::Char('5'),
+            0x4D => Key::Char('6'),
+            0x4F => Key::Char('1'),
+            0x50 => Key::Char('2'),
+            0x51 => Key::Char('3'),
+            0x52 => Key::Char('0'),
+            _ => {
+                return WINDOWS_SCAN_KEYS
+                    .iter()
+                    .find(|(scan_code, _)| *scan_code == scan)
+                    .map(|&(_, c)| Key::Char(c))
+            }
+        })
+    }
+
     /// The key of Linux scan code `code` (`input-event-codes.h`'s `KEY_*`:
     /// evdev's, which Android's `KeyEvent.getScanCode` reports), by the
     /// key's place on the US layout: what a shortcut matches on any layout.
@@ -435,6 +489,58 @@ fn dom_code_key(code: &str) -> Option<Key> {
         .find(|(name, _)| *name == code)
         .map(|&(_, c)| Key::Char(c))
 }
+
+/// The US layout's keys by Windows scan code (set 1), the ones that type a
+/// character without Shift.
+const WINDOWS_SCAN_KEYS: &[(u16, char)] = &[
+    (0x02, '1'),
+    (0x03, '2'),
+    (0x04, '3'),
+    (0x05, '4'),
+    (0x06, '5'),
+    (0x07, '6'),
+    (0x08, '7'),
+    (0x09, '8'),
+    (0x0A, '9'),
+    (0x0B, '0'),
+    (0x0C, '-'),
+    (0x0D, '='),
+    (0x10, 'q'),
+    (0x11, 'w'),
+    (0x12, 'e'),
+    (0x13, 'r'),
+    (0x14, 't'),
+    (0x15, 'y'),
+    (0x16, 'u'),
+    (0x17, 'i'),
+    (0x18, 'o'),
+    (0x19, 'p'),
+    (0x1A, '['),
+    (0x1B, ']'),
+    (0x1E, 'a'),
+    (0x1F, 's'),
+    (0x20, 'd'),
+    (0x21, 'f'),
+    (0x22, 'g'),
+    (0x23, 'h'),
+    (0x24, 'j'),
+    (0x25, 'k'),
+    (0x26, 'l'),
+    (0x27, ';'),
+    (0x28, '\''),
+    (0x29, '`'),
+    (0x2B, '\\'),
+    (0x2C, 'z'),
+    (0x2D, 'x'),
+    (0x2E, 'c'),
+    (0x2F, 'v'),
+    (0x30, 'b'),
+    (0x31, 'n'),
+    (0x32, 'm'),
+    (0x33, ','),
+    (0x34, '.'),
+    (0x35, '/'),
+];
 
 /// The US layout's keys by Linux scan code (`KEY_*`), the ones that type a
 /// character without Shift.

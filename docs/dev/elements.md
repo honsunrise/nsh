@@ -376,7 +376,11 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   (`SharedString`), its text preview, an optional `PhysicalKey` (`Native(u32)` or the DOM's `Code`), modifiers,
   repeat and capture decision. `KeyCapture` (JS `captureKeys`) stores canonical `Keystroke`s, decoded once by the
   shared host decoder with the platform's `mod`; matching uses `KeyEvent::keystroke(os)` (a native code or DOM
-  `code` placed on the US layout, else the reported key) and `KeyCapture::captures` / `captures_key`. Native
+  `code` placed on the US layout, else the reported key) and `KeyCapture::captures` / `captures_key`. A backend
+  whose keymap vocabulary is richer than the physical code (Win32's virtual key, GTK's layout groups) builds the
+  canonical stroke itself and passes it to `captures_key`; `PhysicalKey` stays the source's real identity
+  (`Native` is a Windows scan code with its extended bit, an AppKit key code, a HID usage, a GTK keycode or an
+  Android scan code; `Code` is the DOM's). Native
   backends decide `captured` from their mounted props before defaults; an in-process host (the browser) calls
   `LocalEngine::key_event`, which computes and routes synchronously. A focused native text input keeps the keys
   that edit it (nothing an ancestor captures intercepts its typing or editing). A legacy terminal reports only

@@ -224,8 +224,9 @@ reaches the focused view even when its press went elsewhere, as the DOM's does; 
 held state and invents no releases.
 
 Matching uses a canonical shortcut stroke: a native code or DOM `code` places the key on the US layout, and a
-source that reports only the typed character has its shifted punctuation and capitals placed back on the US key
-with Shift (`?` is `shift+/`) for matching alone; the event's `key` and `text` stay as reported.
+source that reports only the typed character has its shifted punctuation placed back on the US key with Shift
+(`?` is `shift+/`) for matching alone; a capital remains its lower-case key with the source's modifiers (Caps
+Lock is not Shift). The event's `key` and `text` stay as reported.
 
 `captureKeys` in TSX (`{"none"}`, `{"all"}` or an array such as `{["mod+k", "escape"]}`), or
 `capture_keys(KeyCapture::All)` / `capture_keys(KeyCapture::keys(...))` in Rust, mounts the consumption rule before
