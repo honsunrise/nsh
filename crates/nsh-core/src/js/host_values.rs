@@ -17,6 +17,50 @@ use crate::{
     props::{AccessibilityActionDef, AccessibilityValue, Checked, PanActivation, Ripple},
 };
 
+/// `"none"`, `"all"`, or the canonical keystrokes a view captures
+/// (`"mod+k"`, `"shift+tab"`): parsed once here with the shortcut rules
+/// and this platform's `mod` ([`HostCx::apple_keyboard`]). Another string
+/// clears the rule with a warning; an invalid keystroke in the array is
+/// reported and left out.
+impl HostValue for crate::KeyCapture {
+    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
+        use crate::{KeyCapture, keymap::Keystroke};
+        if let Some(text) = input.as_string() {
+            return match text.as_str() {
+                "none" => Some(KeyCapture::None),
+                "all" => Some(KeyCapture::All),
+                other => {
+                    cx.warn(format!(
+                        "captureKeys: expected \"none\", \"all\" or keystrokes, got {other:?}"
+                    ));
+                    None
+                }
+            };
+        }
+        let list = input.as_list()?;
+        let apple = cx.apple_keyboard();
+        let mut keys = Vec::with_capacity(list.len());
+        for index in 0..list.len() {
+            let Some(item) = list.item(index) else {
+                continue;
+            };
+            let Some(text) = item.as_string() else {
+                cx.warn(format!("captureKeys[{index}]: expected a keystroke string"));
+                continue;
+            };
+            match Keystroke::parse_with(&text, apple) {
+                Ok(keystroke) => keys.push(keystroke),
+                Err(error) => cx.warn(format!("captureKeys: {error}")),
+            }
+        }
+        Some(KeyCapture::Keys(keys.into()))
+    }
+
+    fn ts_type(_: &mut TsTypes) -> String {
+        "\"none\" | \"all\" | readonly string[]".into()
+    }
+}
+
 fn number<I: HostInput>(input: &I, key: &str) -> Option<f32> {
     input
         .field(key)

@@ -275,7 +275,243 @@ impl Key {
             Key::F(_) => return None,
         })
     }
+
+    /// The key of Linux scan code `code` (`input-event-codes.h`'s `KEY_*`:
+    /// evdev's, which Android's `KeyEvent.getScanCode` reports), by the
+    /// key's place on the US layout: what a shortcut matches on any layout.
+    /// The keypad's digits and Enter too.
+    pub fn from_scan_code(code: u16) -> Option<Key> {
+        Some(match code {
+            1 => Key::Escape,
+            14 => Key::Backspace,
+            15 => Key::Tab,
+            28 | 96 => Key::Enter,
+            102 => Key::Home,
+            103 => Key::Up,
+            104 => Key::PageUp,
+            105 => Key::Left,
+            106 => Key::Right,
+            107 => Key::End,
+            108 => Key::Down,
+            109 => Key::PageDown,
+            110 => Key::Insert,
+            111 => Key::Delete,
+            59..=68 => Key::F((code - 58) as u8),
+            87 => Key::F(11),
+            88 => Key::F(12),
+            183..=194 => Key::F((code - 170) as u8),
+            // The keypad's digits.
+            71 => Key::Char('7'),
+            72 => Key::Char('8'),
+            73 => Key::Char('9'),
+            75 => Key::Char('4'),
+            76 => Key::Char('5'),
+            77 => Key::Char('6'),
+            79 => Key::Char('1'),
+            80 => Key::Char('2'),
+            81 => Key::Char('3'),
+            82 => Key::Char('0'),
+            57 => Key::Char(' '),
+            _ => {
+                return SCAN_KEYS
+                    .iter()
+                    .find(|(scan, _)| *scan == code)
+                    .map(|&(_, c)| Key::Char(c))
+            }
+        })
+    }
+
+    /// The key of AppKit's virtual key code `code` (`kVK_ANSI_*`,
+    /// `NSEvent.keyCode`), by the key's place on the US layout: what a
+    /// shortcut matches on any layout. Code 0 is the ANSI `A` key; a code
+    /// no key has (`0xffff`) gives `None`.
+    pub fn from_appkit_keycode(code: u16) -> Option<Key> {
+        Some(match code {
+            36 | 76 => Key::Enter,
+            48 => Key::Tab,
+            49 => Key::Char(' '),
+            51 => Key::Backspace,
+            53 => Key::Escape,
+            114 => Key::Insert,
+            115 => Key::Home,
+            116 => Key::PageUp,
+            117 => Key::Delete,
+            119 => Key::End,
+            121 => Key::PageDown,
+            123 => Key::Left,
+            124 => Key::Right,
+            125 => Key::Down,
+            126 => Key::Up,
+            _ => match APPKIT_FUNCTION_KEYS.iter().position(|&k| k == code) {
+                Some(index) => Key::F((index + 1) as u8),
+                None => Key::Char(*APPKIT_KEYS.get(usize::from(code)).filter(|&&c| c != 0)? as char),
+            },
+        })
+    }
+
+    /// The key of the DOM's `KeyboardEvent.code` (`"KeyA"`, `"Digit1"`,
+    /// `"ArrowLeft"`, `"F5"`), by the key's place on the US layout: what a
+    /// shortcut matches on any layout. The keypad's digits too.
+    pub fn from_code(code: &str) -> Option<Key> {
+        Some(match code {
+            "Enter" | "NumpadEnter" => Key::Enter,
+            "Escape" => Key::Escape,
+            "Tab" => Key::Tab,
+            "Backspace" => Key::Backspace,
+            "Delete" => Key::Delete,
+            "Insert" => Key::Insert,
+            "Home" => Key::Home,
+            "End" => Key::End,
+            "PageUp" => Key::PageUp,
+            "PageDown" => Key::PageDown,
+            "ArrowUp" => Key::Up,
+            "ArrowDown" => Key::Down,
+            "ArrowLeft" => Key::Left,
+            "ArrowRight" => Key::Right,
+            "Space" => Key::Char(' '),
+            _ => return dom_code_key(code),
+        })
+    }
+
+    /// The key of a raw logical key name as the sources report it, in the
+    /// DOM's spelling for named keys (`"Enter"`, `"ArrowLeft"`, `"F5"`,
+    /// `" "`) or a single printable ASCII character (letters in lower
+    /// case): the fallback for a source that reports no usable physical
+    /// code. It does not rewrite another layout's characters into ASCII.
+    pub fn from_name(name: &str) -> Option<Key> {
+        if let Some(&(_, key)) = NAMED
+            .iter()
+            .find(|(named, _)| name.eq_ignore_ascii_case(named))
+        {
+            return Some(key);
+        }
+        if name == " " {
+            return Some(Key::Char(' '));
+        }
+        if let Some(rest) = name.strip_prefix('f').or_else(|| name.strip_prefix('F'))
+            && !rest.starts_with('0')
+            && let Ok(number) = rest.parse::<u8>()
+            && (1..=24).contains(&number)
+        {
+            return Some(Key::F(number));
+        }
+        let mut chars = name.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) if c.is_ascii_graphic() => Some(Key::Char(c.to_ascii_lowercase())),
+            _ => None,
+        }
+    }
 }
+
+/// The key of the character, digit, function or punctuation key a DOM
+/// `KeyboardEvent.code` names (`"KeyA"`, `"Digit1"`, `"F5"`), else none.
+fn dom_code_key(code: &str) -> Option<Key> {
+    if let Some(name) = code.strip_prefix("Key") {
+        let mut chars = name.chars();
+        return match (chars.next(), chars.next()) {
+            (Some(c), None) if c.is_ascii_alphabetic() => Some(Key::Char(c.to_ascii_lowercase())),
+            _ => None,
+        };
+    }
+    if let Some(digit) = code
+        .strip_prefix("Digit")
+        .or_else(|| code.strip_prefix("Numpad"))
+        .filter(|d| d.len() == 1)
+        .and_then(|d| d.chars().next())
+        .filter(char::is_ascii_digit)
+    {
+        return Some(Key::Char(digit));
+    }
+    if let Some(number) = code
+        .strip_prefix('F')
+        .filter(|n| !n.starts_with('0'))
+        .and_then(|n| n.parse::<u8>().ok())
+        && (1..=24).contains(&number)
+    {
+        return Some(Key::F(number));
+    }
+    DOM_CODES
+        .iter()
+        .find(|(name, _)| *name == code)
+        .map(|&(_, c)| Key::Char(c))
+}
+
+/// The US layout's keys by Linux scan code (`KEY_*`), the ones that type a
+/// character without Shift.
+const SCAN_KEYS: &[(u16, char)] = &[
+    (2, '1'),
+    (3, '2'),
+    (4, '3'),
+    (5, '4'),
+    (6, '5'),
+    (7, '6'),
+    (8, '7'),
+    (9, '8'),
+    (10, '9'),
+    (11, '0'),
+    (12, '-'),
+    (13, '='),
+    (16, 'q'),
+    (17, 'w'),
+    (18, 'e'),
+    (19, 'r'),
+    (20, 't'),
+    (21, 'y'),
+    (22, 'u'),
+    (23, 'i'),
+    (24, 'o'),
+    (25, 'p'),
+    (26, '['),
+    (27, ']'),
+    (30, 'a'),
+    (31, 's'),
+    (32, 'd'),
+    (33, 'f'),
+    (34, 'g'),
+    (35, 'h'),
+    (36, 'j'),
+    (37, 'k'),
+    (38, 'l'),
+    (39, ';'),
+    (40, '\''),
+    (41, '`'),
+    (43, '\\'),
+    (44, 'z'),
+    (45, 'x'),
+    (46, 'c'),
+    (47, 'v'),
+    (48, 'b'),
+    (49, 'n'),
+    (50, 'm'),
+    (51, ','),
+    (52, '.'),
+    (53, '/'),
+];
+
+/// The ANSI keyboard's characters, by AppKit's virtual key code
+/// (`kVK_ANSI_*`; `\0`: not a character key). Code 0 is the `A` key.
+const APPKIT_KEYS: &[u8; 51] = b"asdfhgzxcv\0bqweryt123465=97-80]ou[ip\0lj'k;\\,/nm.\0\0`";
+
+/// AppKit's virtual key codes of F1 to F20.
+const APPKIT_FUNCTION_KEYS: [u16; 20] = [
+    122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90,
+];
+
+/// The US layout's punctuation and digit-row keys by the DOM's
+/// `KeyboardEvent.code`.
+const DOM_CODES: &[(&str, char)] = &[
+    ("Semicolon", ';'),
+    ("Equal", '='),
+    ("Comma", ','),
+    ("Minus", '-'),
+    ("Period", '.'),
+    ("Slash", '/'),
+    ("Backquote", '`'),
+    ("BracketLeft", '['),
+    ("Backslash", '\\'),
+    ("BracketRight", ']'),
+    ("Quote", '\''),
+];
 
 /// The US layout's punctuation keys' USB HID usages.
 const HID_KEYS: &[(u16, char)] = &[
@@ -578,6 +814,17 @@ pub fn shifted(c: char) -> char {
         .iter()
         .find(|(_, base)| *base == c)
         .map_or(c.to_ascii_uppercase(), |(shifted, _)| *shifted)
+}
+
+/// The key typing `c` without Shift on the US layout, when `c` is one of
+/// its shifted characters (`?` is `/`, `*` is `8`): what a source that
+/// reports only the character it typed means for a shortcut (`shift+/`).
+/// `None` for a base character and for another layout's.
+pub fn unshifted(c: char) -> Option<char> {
+    SHIFTED
+        .iter()
+        .find(|(shifted, _)| *shifted == c)
+        .map(|&(_, base)| base)
 }
 
 /// Whether keyboard shortcuts on `os` follow Apple's conventions: `mod` is

@@ -263,8 +263,8 @@ events! {
 
     WebEvaluation = "onWebEvaluation" as "": "A native WebView evaluation reply (internal; payload: id and a JSON envelope string data).",
     MouseUp = "onMouseUp": "A mouse button was released over the view or a view inside it (payload: [`EventPayload::Mouse`], its `button` naming the released one, with where and the modifiers). The primary button's release also reports `onPressUp`.",
-    KeyDown = "onKeyDown" as "": "A hardware key went down on a focused Rust view (payload: [`EventPayload::Key`]); asynchronous notifications reach its listening ancestors within the window.",
-    KeyUp = "onKeyUp" as "": "A hardware key was released after going down on a focused Rust view (payload: [`EventPayload::Key`]).",
+    KeyDown = "onKeyDown": "A hardware key went down on the focused view or a view inside it (payload: [`EventPayload::Key`]). Notifications bubble to enabled listening ancestors within the same native window; returning from the listener cannot change handling.",
+    KeyUp = "onKeyUp": "A hardware key came up on the focused view (payload: [`EventPayload::Key`]), with the capture decision for this transition. It bubbles to enabled ancestors as `onKeyDown` does.",
 }
 
 /// What an input holds, for the system's autofill and suggestions
@@ -3165,8 +3165,12 @@ pub enum Prop {
     /// popover). Unset, the views that take presses are stops.
     #[prop(js = "focusable")]
     Focusable(Option<bool>),
-    /// Hardware keys captured by a Rust view or a focused descendant.
-    #[prop(reset = Prop::KeyCapture(crate::KeyCapture::None))]
+    /// `captureKeys`: the hardware keys this view or a focused descendant
+    /// consumes before native defaults run: `"none"`, `"all"`, or the
+    /// canonical keystrokes (`"mod+k"`, `"shift+tab"`) it takes. Decided
+    /// from mounted props; eligible app shortcuts and focused native
+    /// inputs keep their keys. Omitting it restores `"none"`.
+    #[prop(js = "captureKeys", on = VIEW, reset = Prop::KeyCapture(crate::KeyCapture::None))]
     KeyCapture(crate::KeyCapture),
     /// `selectable` of a view: the texts in it share one selection, as a
     /// browser page's do ([`crate::selection`]); texts with

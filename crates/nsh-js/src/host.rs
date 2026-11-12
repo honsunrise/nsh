@@ -1291,12 +1291,21 @@ fn payload_object<'js>(cx: &Ctx<'js>, payload: &EventPayload) -> rquickjs::Resul
             }
         }
         EventPayload::Key(event) => {
-            obj.set("key", event.key.name())?;
-            if let Some(text) = &event.text {
-                obj.set("text", text.as_str())?;
+            obj.set("key", event.key.as_str())?;
+            // The declared shape has both optional fields, `null` when the
+            // source has none (never an absent field).
+            match &event.text {
+                Some(text) => obj.set("text", text.as_str())?,
+                None => obj.set("text", Value::new_null(cx.clone()))?,
+            }
+            match &event.physical {
+                Some(nsh_core::PhysicalKey::Native(code)) => obj.set("physical", *code)?,
+                Some(nsh_core::PhysicalKey::Code(code)) => obj.set("physical", code.as_str())?,
+                // A variant this runtime does not know (the enum is
+                // non-exhaustive) has no declared value.
+                Some(_) | None => obj.set("physical", Value::new_null(cx.clone()))?,
             }
             obj.set("modifiers", modifiers_object(cx, &event.modifiers)?)?;
-            obj.set("physical", event.physical)?;
             obj.set("repeat", event.repeat)?;
             obj.set("captured", event.captured)?;
         }

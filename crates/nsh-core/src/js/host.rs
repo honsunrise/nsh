@@ -83,6 +83,10 @@ pub struct HostCx {
     /// ([`element_bits`]); 0 when unknown, which decodes a name several
     /// elements share as the first prop of that name.
     pub element: u32,
+    /// Whether `mod` in a keystroke is Command, when the caller knows it:
+    /// otherwise the engine's environment says
+    /// ([`HostCx::apple_keyboard`]).
+    apple: Option<bool>,
 }
 
 impl HostCx {
@@ -92,6 +96,22 @@ impl HostCx {
             element: element_bits(tag),
             ..Self::default()
         }
+    }
+
+    /// This context with Apple's key conventions fixed: `mod` is Command.
+    /// A test or an embedder that has no engine environment sets it.
+    pub fn with_apple_keyboard(mut self, apple: bool) -> Self {
+        self.apple = Some(apple);
+        self
+    }
+
+    /// Whether keyboard conventions are Apple's here (`mod` is Command):
+    /// what this context was given, else the engine's environment
+    /// ([`crate::keymap::apple_keys`]), else non-Apple conventions.
+    pub fn apple_keyboard(&self) -> bool {
+        self.apple
+            .or_else(crate::element::try_apple_keys)
+            .unwrap_or(false)
     }
 
     /// Reports `message`.
@@ -489,6 +509,21 @@ export interface Modifiers {
   shift: boolean;
   /** Command on Apple platforms, the Windows / Super key elsewhere. */
   platform: boolean;
+}
+
+/** A hardware key transition on the focused view: the payload of `onKeyDown` and `onKeyUp` (`nsh_core::KeyEvent`). */
+export interface KeyEvent {
+  /** The source's logical key: the DOM's spelling for named keys (`"Enter"`, `"ArrowLeft"`), else the character the key reports, in its case and layout. `"Unidentified"` when the source names none. */
+  key: string;
+  /** A preview of the character with the modifiers held, never committed input-method text. */
+  text: string | null;
+  /** The key's physical identity, when the source reports one: a native numeric code or the DOM's `code`; `null` otherwise. */
+  physical: number | string | null;
+  modifiers: Modifiers;
+  /** An auto-repeat of a held key (the press itself is not one). */
+  repeat: boolean;
+  /** This transition matches the mounted `captureKeys` rule of the focused view or an enabled ancestor, so the platform consumes it. */
+  captured: boolean;
 }
 
 /** Where the core placed an overlay: the payload of `onPosition`. */
@@ -936,6 +971,18 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
         "Before the text changes: `key` is the typed text, `Backspace` or `Enter`.",
     ),
     (
+        EventKind::KeyDown,
+        on::VIEW,
+        "(e: KeyEvent) => void",
+        "A hardware key went down on the focused view or a view inside it. It bubbles to enabled listening ancestors within the same native window; the source's own limits apply (a terminal that reports only strokes sends no separate release or physical code).",
+    ),
+    (
+        EventKind::KeyUp,
+        on::VIEW,
+        "(e: KeyEvent) => void",
+        "A hardware key came up on the focused view, with this transition's capture decision; it bubbles as `onKeyDown` does. A window that loses the focus invents no releases.",
+    ),
+    (
         EventKind::CompositionChange,
         on::INPUT,
         "(e: { composing: boolean; text: string }) => void",
@@ -1017,9 +1064,6 @@ pub const INTERNAL_EVENTS: &[EventKind] = &[
     EventKind::Audio,
     EventKind::Window,
     EventKind::EditAction,
-    // Native Rust view key notifications are not direct TSX event props.
-    EventKind::KeyDown,
-    EventKind::KeyUp,
     EventKind::KeyCommand,
     EventKind::Menu,
     EventKind::ViewableItemsChange,

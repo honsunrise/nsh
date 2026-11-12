@@ -436,6 +436,11 @@ pub(crate) fn decode_prop<'js>(
         }));
     }
     let mut cx = tag.map_or_else(HostCx::default, HostCx::for_element);
+    // `captureKeys` holds keystrokes: `mod` is Command where the page's
+    // platform follows Apple's conventions.
+    if name == "captureKeys" {
+        cx = cx.with_apple_keyboard(super::apple_keyboard());
+    }
     let input = Js(value);
     let decoded = <Prop as HostProps>::decode(name, &input, &mut cx);
     for message in cx.warnings {

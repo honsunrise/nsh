@@ -133,19 +133,30 @@ pub(super) fn payload(host: &Bindings, payload: &EventPayload) -> Result<Value, 
             ("phase", Value::string(p.phase.name())?),
             ("modifiers", modifiers(&p.modifiers)?),
         ])?,
-        EventPayload::Key(event) => {
-            let out = object([
-                ("key", Value::string(event.key.name())?),
-                ("modifiers", modifiers(&event.modifiers)?),
-                ("physical", number(event.physical)),
-                ("repeat", boolean(event.repeat)),
-                ("captured", boolean(event.captured)),
-            ])?;
-            if let Some(text) = &event.text {
-                out.set("text", &Value::string(text.as_str())?)?;
-            }
-            out
-        }
+        EventPayload::Key(event) => object([
+            ("key", Value::string(event.key.as_str())?),
+            // `null` for metadata the source has none of, as declared.
+            (
+                "text",
+                match &event.text {
+                    Some(text) => Value::string(text.as_str())?,
+                    None => Value(1),
+                },
+            ),
+            (
+                "physical",
+                match &event.physical {
+                    Some(nsh_core::PhysicalKey::Native(code)) => number(*code),
+                    Some(nsh_core::PhysicalKey::Code(code)) => Value::string(code.as_str())?,
+                    // A variant this runtime does not know (the enum is
+                    // non-exhaustive) has no declared value.
+                    Some(_) | None => Value(1),
+                },
+            ),
+            ("modifiers", modifiers(&event.modifiers)?),
+            ("repeat", boolean(event.repeat)),
+            ("captured", boolean(event.captured)),
+        ])?,
         EventPayload::Wheel(w) => {
             let (dx, dy) = w.delta.xy();
             object([

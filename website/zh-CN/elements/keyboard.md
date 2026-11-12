@@ -186,17 +186,55 @@ function MessageBar() {
 > [!NOTE]
 > 要让内容保持在键盘之上，`env(keyboard-inset-height)` 是更简单的方式：它在原生侧随键盘动画，不需要运行代码。
 
-## 自定义 Rust 视图的硬件按键
+## 自定义视图的硬件按键
 
-Linux 上获得焦点的 Rust 视图可以把硬件输入交给应用自己的交互引擎：`on_key_down` 报告当前布局的逻辑键、物理键码和重复按键，`on_key_up` 报告对应的释放。
+获得焦点的视图会收到其平台报告的真实硬件按键转换：TSX 中的 `onKeyDown` / `onKeyUp`，或 Rust 中的 `on_key_down` / `on_key_up`。
 这适用于自行绘制的画布或嵌入式交互界面。命名快捷键使用 `on_key` / `on_key_with`，文本编辑使用 `Input`，终端会话使用 `Terminal`。
 
-两个监听函数都不返回值。`capture_keys(KeyCapture::All)` 或 `capture_keys(KeyCapture::keys(...))` 在输入到达前挂载捕获规则；`KeyEvent::captured` 报告已作出的决定。
-规则支持响应式值；保留视图再次渲染时省略规则，会恢复 `KeyCapture::None`。可用的应用快捷键保持优先级，获得焦点的原生输入框保留自己的按键。
-被捕获的 Tab 留在当前视图；仅被观察的 Tab 按正常规则切换焦点。
+`KeyEvent` 只报告输入源实际提供的数据：
 
-按下通知沿同一原生窗口内已启用且注册监听的祖先传播。窗口保持活动期间，释放通知回到最初按下的目标；窗口失活会清除按住状态。
-`KeyEvent::text` 是键值对应的字符预览。Linux 桌面模式的无界面驱动也支持这一 Rust API；Rust UI 集可以向 TSX 暴露应用专用组件及事件。
+| 字段 | 含义 |
+|---|---|
+| `key` | 输入源的逻辑键：命名键用 DOM 的拼写（`"Enter"`、`"ArrowLeft"`），可打印键用其实际报告的字符，保留大小写与当前布局，不会强行折算到另一种布局。输入源无法命名时为 `"Unidentified"`。 |
+| `text` | 按住修饰键时该键会产生的字符预览（`"A"`、`"?"`），绝不是输入法提交的文本；没有时为 `null`。 |
+| `physical` | 输入源报告了物理身份时的键身份：原生数字键码或 DOM 的 `code`；否则为 `null`。 |
+| `modifiers` | 本次转换之后仍按住的修饰键。 |
+| `repeat` | 按住键产生的自动重复。 |
+| `captured` | 本次转换匹配已挂载的捕获规则，平台会消费它。 |
+
+两个监听函数都不返回值。聚焦视图上的一个平台事件会沿同一原生窗口内的已启用监听祖先各传播一次，`onKeyDown` 与 `onKeyUp` 都是如此。
+输入源报告的真实释放会到达聚焦视图，即使最初的按下发生在别处（与 DOM 一致）；窗口失去焦点会清除按住状态，不会伪造释放事件。
+
+匹配使用规范的快捷键按键序列：原生键码或 DOM 的 `code` 会把键放回 US 布局；只报告字符的输入源会把 Shift 产生的标点和大写字母
+还原为 US 布局上的键并带上 Shift（`?` 即 `shift+/`），这仅用于匹配；事件中的 `key` 与 `text` 仍保持输入源报告的内容。
+
+TSX 的 `captureKeys`（`{"none"}`、`{"all"}`，或 `{["mod+k", "escape"]}` 这样的数组），以及 Rust 的
+`capture_keys(KeyCapture::All)` / `capture_keys(KeyCapture::keys(...))`，会在输入到达前挂载消费规则。规则只解析一次，成为规范的快捷键
+按键序列（即 `nsh/keymap` 的语法；`mod` 在 Apple 平台上是 Command，其他平台是 Control），`KeyEvent.captured` 报告本次转换的决定。
+规则支持响应式值；保留视图再次渲染时省略规则，会恢复 `"none"`。可用的应用快捷键保持优先级，获得焦点的原生输入框保留自己的按键，
+捕获也无法越过操作系统根本不投递的快捷键。被捕获的 Tab 留在当前视图；仅被观察的 Tab 按正常规则切换焦点。
+
+```tsx
+import { signal, Text, View } from "nsh";
+
+function Pad() {
+  const log = signal("");
+  return (
+    <View
+      focusable
+      captureKeys={["mod+k", "shift+tab"]}
+      onKeyDown={(e) => log.set(`${e.key} ${e.captured} ${e.repeat}`)}
+      onKeyUp={(e) => log.set(`up ${e.key}`)}
+    >
+      <Text>{log()}</Text>
+    </View>
+  );
+}
+```
+
+Linux 桌面模式的无界面驱动也会执行这一 Rust API；Rust UI 集可以向 TSX 暴露应用专用组件及事件。
+不同输入源的能力不同：只报告击键的旧式终端不会产生释放、重复或物理键码，GPUI 的逻辑事件也没有物理键码。
+各平台输入源报告的字段见 `docs/dev/tooling.md` 及各平台的开发文档。
 
 ## 平台说明
 
