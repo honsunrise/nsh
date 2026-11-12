@@ -1275,7 +1275,7 @@ fn RawKeyPage() -> impl IntoElement {
 #[test]
 fn raw_key_events_report_the_terminal_events_and_never_ignore_a_release() {
     let (mut view, rx) = surface();
-    let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 10)).unwrap();
     view.load(App::Rust(Root::new::<RawKeyPage>(|| ())))
         .unwrap();
     draw_until(&mut view, &mut terminal, &rx, "down none");
@@ -1501,7 +1501,7 @@ fn PortaledKeys() -> impl IntoElement {
                             view()
                                 .focusable(true)
                                 .on_press(move |_: &()| pressed.update(|n| *n += 1))
-                                .on_focus(move |_: &()| focused.set("portaled"))
+                                .on_focus(move |_: &()| focused.set("portaled".into()))
                                 .child(text("portaled child")),
                         ),
                 ),
@@ -1561,7 +1561,7 @@ fn SiblingPortals() -> impl IntoElement {
                         .absolute()
                         .left(px(0.0))
                         .top(px(0.0))
-                        .w(px(40.0))
+                        .w(px(240.0))
                         .h(px(16.0))
                         .child(text("listening portal")),
                 ),
@@ -1571,13 +1571,13 @@ fn SiblingPortals() -> impl IntoElement {
                 .absolute()
                 .left(px(0.0))
                 .top(px(16.0))
-                .w(px(40.0))
+                .w(px(240.0))
                 .h(px(16.0))
                 .child(
                     view()
                         .focusable(true)
                         .on_press(|_: &()| {})
-                        .on_focus(move |_: &()| focused.set("sibling"))
+                        .on_focus(move |_: &()| focused.set("sibling".into()))
                         .child(text("sibling child")),
                 ),
         )

@@ -284,7 +284,7 @@ pub(crate) fn released(
     }
     // The view focused now hears the release, even when the press went to
     // another view; its capture decision is the mounted policy now.
-    let mut event = key_event(surface, view, keyval, keycode, state, KeyPhase::Up, group);
+    let mut event = key_event(surface, keyval, keycode, state, KeyPhase::Up);
     event.captured = captures(surface, view, &event, keycode, state, group);
     notify(surface, view, EventKind::KeyUp, event);
 }
@@ -302,12 +302,10 @@ pub(crate) enum KeyPhase {
 /// when the source has none.
 pub(crate) fn key_event(
     surface: &Surface,
-    view: &NshView,
     keyval: gdk::Key,
     keycode: u32,
     state: gdk::ModifierType,
     phase: KeyPhase,
-    _group: i32,
 ) -> KeyEvent {
     let (down, repeat) = match phase {
         KeyPhase::Down { repeat } => (true, repeat),
@@ -378,13 +376,15 @@ fn shortcut_base(
     {
         return Some(base);
     }
-    // Layouts can hold several groups (`ru`, `us`); GDK reports each
-    // group's keyval for the same keycode. A named key (Enter, Escape) is
-    // the same in every group and was returned above.
-    for other in 0..=8 {
-        if other == group {
+    // Ask GDK which groups exist instead of translating guessed indices:
+    // X11 rejects group numbers outside its keymap.
+    let mut previous = group;
+    for (mapping, _) in display.map_keycode(keycode).into_iter().flatten() {
+        let other = mapping.group();
+        if other == group || other == previous {
             continue;
         }
+        previous = other;
         if let Some(key) = translated(other)
             && key.to_unicode().is_some_and(|c| c.is_ascii_graphic())
         {
@@ -453,6 +453,7 @@ fn shortcut_key(keyval: gdk::Key) -> Option<ShortcutKey> {
 fn logical_key(keyval: gdk::Key) -> SharedString {
     use gdk::Key as K;
     let named = match keyval {
+        K::VoidSymbol => "Unidentified",
         K::Return | K::KP_Enter | K::ISO_Enter => "Enter",
         K::Escape => "Escape",
         K::Tab | K::KP_Tab | K::ISO_Left_Tab => "Tab",
@@ -508,7 +509,6 @@ fn logical_key(keyval: gdk::Key) -> SharedString {
                 return SharedString::from(c.to_string());
             }
             return match keyval.name() {
-                Some(name) if name.as_str() == "VoidSymbol" => SharedString::from("Unidentified"),
                 Some(name) if name.as_str().starts_with("dead_") => SharedString::from("Dead"),
                 Some(name) => SharedString::from(name.to_string()),
                 None => SharedString::from("Unidentified"),
@@ -548,14 +548,13 @@ mod tests {
                     kind: ViewKind::View,
                 }],
             );
-            let view = view(&surface, 2);
             let event = |keyval, state, repeat, down| {
                 let phase = if down {
                     super::KeyPhase::Down { repeat }
                 } else {
                     super::KeyPhase::Up
                 };
-                super::key_event(&surface, &view, keyval, 0, state, phase, 0)
+                super::key_event(&surface, keyval, 0, state, phase)
             };
             super::track_modifiers(&surface, gdk::Key::Shift_L, 50, true);
             assert!(
@@ -630,12 +629,10 @@ mod tests {
             let numlock = gdk::ModifierType::from_bits_retain(1 << 4);
             let numeric = key_event(
                 &surface,
-                &view,
                 gdk::Key::KP_1,
                 keycode,
                 numlock,
                 KeyPhase::Down { repeat: false },
-                0,
             );
             assert_eq!(numeric.key, "1");
             assert_eq!(numeric.text.as_deref(), Some("1"));
@@ -649,12 +646,10 @@ mod tests {
             assert!(capture.captures(&stroke));
             let navigation = key_event(
                 &surface,
-                &view,
                 gdk::Key::KP_End,
                 keycode,
                 gdk::ModifierType::empty(),
                 KeyPhase::Down { repeat: false },
-                0,
             );
             assert_eq!(navigation.key, "End");
             assert_eq!(navigation.text, None);

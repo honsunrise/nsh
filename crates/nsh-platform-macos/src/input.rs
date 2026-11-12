@@ -1745,9 +1745,7 @@ fn down(
     // view that is not focusable leaves it where it is.
     if !hit.native
         && let Some(window) = hit.view.ns().window()
-        && let Some(target) = chain(&hit.view)
-            .into_iter()
-            .find(|view| explicitly_focusable(view))
+        && let Some(target) = chain(&hit.view).into_iter().find(explicitly_focusable)
     {
         window.makeFirstResponder(Some(target.ns()));
     }

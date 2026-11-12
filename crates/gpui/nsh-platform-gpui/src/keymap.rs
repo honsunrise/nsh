@@ -270,7 +270,7 @@ mod tests {
     fn a_key_with_no_virtual_code_is_matched_by_its_stroke() {
         use nsh_core::keymap::{KeyBinding, Keymap, Keystroke, When};
 
-        use super::key_stroke;
+        use super::{KeyEvent, key_stroke};
         use crate::surface::Surface;
 
         let surface = Surface::new(nsh_engine::Environment::default());

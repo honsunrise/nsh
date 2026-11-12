@@ -1,39 +1,4 @@
-import { mount, Overlay, Scroll, signal, Text, View } from "nsh";
-
-/** The fields of the core key event this test reads. */
-interface KeyLike {
-  key: string;
-  text: string | null;
-  physical: number | string | null;
-  repeat: boolean;
-  captured: boolean;
-}
-
-/** The props of a focusable view in this test: the app's key event props
- * and the ones every view has. Spreading them keeps this app type-checking
- * whether or not the generated view props already declare the key ones. */
-interface KeyViewProps {
-  testID: string;
-  focusable: true;
-  captureKeys?: "all" | readonly string[];
-  onPress?: () => void;
-  onFocus: () => void;
-  onBlur: () => void;
-  onKeyDown?: (e: KeyLike) => void;
-  onKeyUp?: (e: KeyLike) => void;
-}
-
-/** A scroll view's key props (also extra to its generated props). */
-interface ScrollKeyProps {
-  captureKeys?: "all" | readonly string[];
-  onKeyDown: (e: KeyLike) => void;
-}
-
-/** A logical ancestor's key props (also extra to View's generated props). */
-interface HostKeyProps {
-  captureKeys?: "all" | readonly string[];
-  onKeyDown: (e: KeyLike) => void;
-}
+import { mount, Overlay, Scroll, signal, Text, View, type ScrollProps, type ViewProps } from "nsh";
 
 /** What the focused view's `onKeyDown` / `onKeyUp` reported last: the
  * source's key name, whether a mounted capture rule took it, the physical
@@ -59,8 +24,8 @@ function App() {
     name: string,
     captureKeys?: "all" | readonly string[],
     press = true,
-  ): KeyViewProps => {
-    const props: KeyViewProps = {
+  ): ViewProps => {
+    const props: ViewProps = {
       testID: name,
       focusable: true,
       onFocus: () => focus.set(name),
@@ -86,14 +51,14 @@ function App() {
   };
 
   /** A focusable view with no press or key listeners of its own. */
-  const focusOnly = (name: string): KeyViewProps => ({
+  const focusOnly = (name: string): ViewProps => ({
     testID: name,
     focusable: true,
     onFocus: () => focus.set(name),
     onBlur: () => focus.set("none"),
   });
 
-  const scrollProps: ScrollKeyProps = {
+  const scrollProps: ScrollProps = {
     captureKeys: ["a"],
     onKeyDown: (e) => {
       key.set(e.key);
@@ -103,7 +68,7 @@ function App() {
     },
   };
 
-  const hostAProps: HostKeyProps = {
+  const hostAProps: ViewProps = {
     captureKeys: ["a"],
     onKeyDown: (e) => {
       hostAKey.set(e.key);
@@ -112,7 +77,7 @@ function App() {
     },
   };
 
-  const childAProps: KeyViewProps = {
+  const childAProps: ViewProps = {
     testID: "childA",
     focusable: true,
     onPress: () => {},
@@ -120,7 +85,7 @@ function App() {
     onBlur: () => focus.set("none"),
   };
 
-  const childBProps: KeyViewProps = {
+  const childBProps: ViewProps = {
     ...childAProps,
     testID: "childB",
     onFocus: () => focus.set("childB"),

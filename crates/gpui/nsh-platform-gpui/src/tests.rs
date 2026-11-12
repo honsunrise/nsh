@@ -234,7 +234,6 @@ fn keys_reach_the_fields_of_a_surface_showing_a_native_component(cx: &mut TestAp
     wait_for(&view, cx, "b");
 }
 
-#[nsh_core::element::module]
 mod captured_keys {
     use nsh_core::prelude::*;
 

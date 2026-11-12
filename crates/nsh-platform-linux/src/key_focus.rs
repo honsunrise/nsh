@@ -418,12 +418,10 @@ pub(crate) fn press(
     // it. The capture decides over the canonical shortcut keystroke.
     let mut key_event = crate::keyboard::key_event(
         surface,
-        &view,
         keyval,
         keycode,
         modifiers,
         crate::keyboard::KeyPhase::Down { repeat },
-        group,
     );
     let captured = crate::keyboard::captures(surface, &view, &key_event, keycode, modifiers, group);
     key_event.captured = captured;
@@ -617,12 +615,10 @@ mod tests {
         let keycode = keycode(key);
         let event = crate::keyboard::key_event(
             surface,
-            view,
             key,
             keycode,
             gdk::ModifierType::empty(),
             crate::keyboard::KeyPhase::Down { repeat: false },
-            0,
         );
         crate::keyboard::captures(
             surface,
@@ -837,16 +833,14 @@ mod tests {
             assert!(wait_until(|| first.is_mapped()));
             focus(&first);
             assert!(first.is_focus());
-            // A keycode with no keymap entry is `Unidentified`, with its
-            // hardware code kept and no text.
+            // An unnamed key without a hardware code reports neither an
+            // invented identity nor text.
             let event = crate::keyboard::key_event(
                 &surface,
-                &first,
                 gdk::Key::VoidSymbol,
                 0,
                 gdk::ModifierType::empty(),
                 crate::keyboard::KeyPhase::Down { repeat: false },
-                0,
             );
             assert_eq!(event.key, "Unidentified");
             assert_eq!(event.physical, None);
@@ -921,12 +915,10 @@ mod tests {
                 EventKind::KeyDown,
                 crate::keyboard::key_event(
                     &surface,
-                    &first,
                     gdk::Key::Escape,
                     9,
                     gdk::ModifierType::empty(),
                     crate::keyboard::KeyPhase::Down { repeat: false },
-                    0,
                 ),
             );
             assert!(crate::keyboard::held_key(&surface, 9));

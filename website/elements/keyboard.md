@@ -223,10 +223,13 @@ within the same native window, once each, for `onKeyDown` and `onKeyUp` alike. A
 reaches the focused view even when its press went elsewhere, as the DOM's does; losing the window's focus clears
 held state and invents no releases.
 
-Matching uses a canonical shortcut stroke: a native code or DOM `code` places the key on the US layout, and a
-source that reports only the typed character has its shifted punctuation placed back on the US key with Shift
-(`?` is `shift+/`) for matching alone; a capital remains its lower-case key with the source's modifiers (Caps
-Lock is not Shift). The event's `key` and `text` stay as reported.
+The same typed props apply to host elements such as `Scroll`, `List` and `Overlay`. A listener or capture rule on
+one of these ancestors follows the focused descendant's logical ancestry, including children rendered in overlays.
+
+Matching uses the platform's existing shortcut normalization, independently of the raw event. A source that reports
+only the typed character has shifted punctuation placed back on the US key with Shift (`?` is `shift+/`) for
+matching alone; a capital remains its lower-case key with the source's modifiers (Caps Lock is not Shift).
+The event's `key` and `text` stay as reported.
 
 `captureKeys` in TSX (`{"none"}`, `{"all"}` or an array such as `{["mod+k", "escape"]}`), or
 `capture_keys(KeyCapture::All)` / `capture_keys(KeyCapture::keys(...))` in Rust, mounts the consumption rule before
