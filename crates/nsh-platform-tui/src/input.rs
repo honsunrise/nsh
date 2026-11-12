@@ -85,7 +85,11 @@ pub struct MouseInput {
 pub enum Input {
     /// Mouse input.
     Mouse(MouseInput),
-    /// A key name as in NSH's keymap (`Enter`, `Escape`, or a character).
+    /// A key as the terminal names it: a character, or the key's name
+    /// (`Enter`, `Escape`, `ArrowLeft`, `F5`; the keymap's `Left` and the
+    /// DOM's `ArrowLeft` both name the same key). `release` is true when
+    /// the terminal reported the key coming up: only the kitty keyboard
+    /// protocol reports that, so a terminal without it sends presses only.
     Key {
         /// Key name.
         key: String,
@@ -94,7 +98,9 @@ pub enum Input {
         /// True for a release when the terminal reports it.
         release: bool,
     },
-    /// A repeated key press identified by the terminal protocol.
+    /// An auto-repeat the terminal reported (the kitty keyboard protocol):
+    /// a press the key's being held repeated. A terminal without the
+    /// protocol sends its repeats as presses of their own.
     KeyRepeat {
         /// Key name, as for `Key`.
         key: String,
