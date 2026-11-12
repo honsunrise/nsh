@@ -4436,10 +4436,7 @@ mod tests {
                     .h(px(40.0))
                     .focusable(true)
                     .on_press(move |_: &()| {})
-                    .on_key_up({
-                        let up = up;
-                        move |_: &KeyEvent| up.set("first".into())
-                    }),
+                    .on_key_up(move |_: &KeyEvent| up.set("first".into())),
             )
             .child(
                 view()

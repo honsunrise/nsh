@@ -972,13 +972,13 @@ pub const EVENTS: &[(EventKind, u32, &str, &str)] = &[
     ),
     (
         EventKind::KeyDown,
-        on::VIEW,
+        on::ALL,
         "(e: KeyEvent) => void",
         "A hardware key went down on the focused view or a view inside it. It bubbles to enabled listening ancestors within the same native window; the source's own limits apply (a terminal that reports only strokes sends no separate release or physical code).",
     ),
     (
         EventKind::KeyUp,
-        on::VIEW,
+        on::ALL,
         "(e: KeyEvent) => void",
         "A hardware key came up on the focused view, with this transition's capture decision; it bubbles as `onKeyDown` does. A window that loses the focus invents no releases.",
     ),

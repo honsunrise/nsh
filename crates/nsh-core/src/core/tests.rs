@@ -24673,18 +24673,22 @@ fn key_capture_uses_the_adapters_stroke_not_the_physical_code() {
 
     // The event's own physical code derives a different stroke (`1`, `w`);
     // the adapter's stroke is authoritative and the payload is unchanged.
-    let mut numeric_end = KeyEvent::default();
-    numeric_end.key = "End".into();
-    numeric_end.physical = Some(PhysicalKey::Code("Numpad1".into()));
+    let numeric_end = KeyEvent {
+        key: "End".into(),
+        physical: Some(PhysicalKey::Code("Numpad1".into())),
+        ..Default::default()
+    };
     assert_eq!(
         numeric_end.keystroke(Os::Web).map(|k| k.key),
         Some(ShortcutKey::Char('1'))
     );
     assert!(c.key_captured(host, Some(&end)));
 
-    let mut azerty_z = KeyEvent::default();
-    azerty_z.key = "z".into();
-    azerty_z.physical = Some(PhysicalKey::Code("KeyW".into()));
+    let azerty_z = KeyEvent {
+        key: "z".into(),
+        physical: Some(PhysicalKey::Code("KeyW".into())),
+        ..Default::default()
+    };
     assert_eq!(
         azerty_z.keystroke(Os::Web).map(|k| k.key),
         Some(ShortcutKey::Char('w'))

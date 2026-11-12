@@ -1052,7 +1052,7 @@ impl AppView {
             let Some((id, captured)) = self.raw_target(stroke.as_ref()) else {
                 return Handled::Ignored;
             };
-            self.notify_key(
+            Self::notify_key(
                 id,
                 key,
                 modifiers,
@@ -1093,7 +1093,7 @@ impl AppView {
         if let Some(phase) = phase
             && let Some((id, captured)) = self.raw_target(stroke.as_ref())
         {
-            self.notify_key(
+            Self::notify_key(
                 id,
                 key,
                 modifiers,
@@ -1173,7 +1173,6 @@ impl AppView {
     /// Reports a key transition to `id`, which the engine bubbles to its
     /// ancestors, carrying the capture decision made for this transition.
     fn notify_key(
-        &self,
         id: nsh_core::NodeId,
         key: &str,
         modifiers: crate::Modifiers,

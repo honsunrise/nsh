@@ -3169,7 +3169,7 @@ pub enum Prop {
     /// canonical keystrokes (`"mod+k"`, `"shift+tab"`) it takes. Decided
     /// from mounted props; eligible app shortcuts and focused native
     /// inputs keep their keys. Omitting it restores `"none"`.
-    #[prop(js = "captureKeys", on = VIEW, reset = Prop::KeyCapture(crate::KeyCapture::None))]
+    #[prop(js = "captureKeys", reset = Prop::KeyCapture(crate::KeyCapture::None))]
     KeyCapture(crate::KeyCapture),
     /// `selectable` of a view: the texts in it share one selection, as a
     /// browser page's do ([`crate::selection`]); texts with

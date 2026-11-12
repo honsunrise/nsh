@@ -390,6 +390,8 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   that edit it (nothing an ancestor captures intercepts its typing or editing). A legacy terminal reports only
   strokes: no invented releases, repeats or physical codes. Losing the window's focus clears held state and
   synthesizes nothing; a real release is reported where the focus is, as the DOM does.
+  The generated props are common host props, as `focusable` is: a `Scroll`, `List` or `Overlay` can listen or
+  capture for a focused descendant with the same typed Rust and TSX interface as `View`.
 - **System UI**: the status bar follows UIKit, where the topmost view controller's `preferredStatusBarStyle` decides
   and Info.plist holds the default: a page's or dialog's `statusBar` (`{ foreground, hidden, animated }`, a host prop
   of screens and modals, `ScreenProp::StatusBar`, decoded to a `StatusBarSetting`; `Screen::status_bar` /

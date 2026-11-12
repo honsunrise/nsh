@@ -1,4 +1,4 @@
-import { mount, signal, Text, View } from "nsh";
+import { mount, signal, Text, View, type KeyEvent } from "nsh";
 
 /**
  * A scenario for the web's raw key events and mounted capture policy.
@@ -15,14 +15,7 @@ import { mount, signal, Text, View } from "nsh";
 function App() {
   const presses = signal(0);
   const events = signal<string[]>([]);
-  const listen = (phase: string) => (e: {
-    key: string;
-    text: string | null;
-    physical: number | string | null;
-    modifiers: { control: boolean; alt: boolean; shift: boolean; platform: boolean };
-    repeat: boolean;
-    captured: boolean;
-  }) => {
+  const listen = (phase: string) => (e: KeyEvent) => {
     const held = [
       e.modifiers.control && "ctrl",
       e.modifiers.alt && "alt",
