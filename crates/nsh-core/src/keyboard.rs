@@ -30,10 +30,10 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PhysicalKey {
-    /// The platform's numeric code, as it reports it: a Windows virtual-key
-    /// code, AppKit's `NSEvent.keyCode`, a UIKit HID usage, a GTK keycode or
-    /// an Android scan code (`KeyEvent.getScanCode`, the Linux key code of
-    /// the key). Code 0 is a key on Apple keyboards; Android reports 0 for
+    /// The platform's numeric code, as it reports it: a Windows scan code
+    /// (`scan | (extended << 8)`, from `WM_KEYDOWN`'s LPARAM), AppKit's
+    /// `NSEvent.keyCode`, a UIKit HID usage, a GTK keycode or an Android
+    /// scan code (`KeyEvent.getScanCode`, the Linux key code of the key). Code 0 is a key on Apple keyboards; Android reports 0 for
     /// no scan code, which is `None`.
     Native(u32),
     /// The DOM's `KeyboardEvent.code` (`"KeyA"`, `"Digit1"`, `"ArrowLeft"`).
@@ -93,11 +93,16 @@ impl KeyEvent {
     /// A GTK keycode and a terminal's codes are not placed here: the
     /// backend that has the layout (GTK's Latin group, which its shortcuts
     /// match by) builds the stroke, and otherwise the reported key is used.
+    /// On Windows this is the scan code on the US layout; the app keymap's
+    /// vocabulary comes from the virtual key (`Key::from_virtual_key`), so
+    /// a Win32 backend that has the VK builds that stroke itself and gives
+    /// it to [`KeyCapture::captures_key`].
     /// A source that reports only the character it typed (no physical
-    /// code) has its shifted punctuation and capitals placed back on the
-    /// US key with Shift (`?` is `shift+/`, `A` is `shift+a`), as the
-    /// shortcut vocabulary spells them; the event's own `key` and `text`
-    /// stay as the source reported them.
+    /// code) has its shifted punctuation placed back on the US key with
+    /// Shift (`?` is `shift+/`, `*` is `shift+8`), as the shortcut
+    /// vocabulary spells them; a capital stays its lower case key with the
+    /// source's modifiers (Caps Lock is not Shift). The event's own `key`
+    /// and `text` stay as the source reported them.
     ///
     /// `None` for the modifier keys themselves and for any key that is no
     /// shortcut: [`KeyCapture::All`] still captures it
@@ -127,10 +132,10 @@ impl KeyEvent {
                         modifiers.shift = true;
                         crate::keymap::Key::Char(base)
                     }
-                    None => {
-                        modifiers.shift |= c.is_ascii_uppercase();
-                        crate::keymap::Key::Char(c.to_ascii_lowercase())
-                    }
+                    // A capital is not evidence of Shift: Caps Lock types
+                    // one with the source's modifiers unchanged. Its
+                    // shortcut key is the lower case one.
+                    None => crate::keymap::Key::Char(c.to_ascii_lowercase()),
                 }
             }
             _ => crate::keymap::Key::from_name(&self.key)?,
@@ -146,7 +151,9 @@ impl PhysicalKey {
             PhysicalKey::Native(code) => {
                 let code = u16::try_from(*code).ok()?;
                 match os {
-                    Os::Windows => crate::keymap::Key::from_virtual_key(code),
+                    // A scan code (`scan | extended << 8`), not a virtual
+                    // key: scan 0x1E is `a`, where VK 0x1E is no key.
+                    Os::Windows => crate::keymap::Key::from_windows_scan_code(code),
                     // AppKit's virtual key codes (`NSEvent.keyCode`), not
                     // UIKit's HID usages.
                     Os::MacOs => crate::keymap::Key::from_appkit_keycode(code),
@@ -371,9 +378,27 @@ mod tests {
             physical: Some(PhysicalKey::Native(code)),
             ..Default::default()
         };
+        // Windows scan codes: 0x1E is `a` (VK 0x1E is no key), 0x30 is `b`
+        // (VK 0x30 is `0`), 0x14B is the extended Left arrow.
         assert_eq!(
-            native(0x41).keystroke(Os::Windows).map(|k| k.key),
+            native(0x1E).keystroke(Os::Windows).map(|k| k.key),
             Some(ShortcutKey::Char('a'))
+        );
+        assert_eq!(
+            native(0x30).keystroke(Os::Windows).map(|k| k.key),
+            Some(ShortcutKey::Char('b'))
+        );
+        assert_eq!(
+            native(0x14B).keystroke(Os::Windows).map(|k| k.key),
+            Some(ShortcutKey::Left)
+        );
+        assert_eq!(
+            native(0x47).keystroke(Os::Windows).map(|k| k.key),
+            Some(ShortcutKey::Char('7'))
+        );
+        assert_eq!(
+            native(0x147).keystroke(Os::Windows).map(|k| k.key),
+            Some(ShortcutKey::Home)
         );
         assert_eq!(
             native(0).keystroke(Os::MacOs).map(|k| k.key),
@@ -449,10 +474,24 @@ mod tests {
         assert!(KeyCapture::keys([stroke("shift+1")]).captures(
             bang.keystroke(Os::Linux).as_ref().unwrap()
         ));
-        // An upper case letter implies Shift, as the shortcuts spell it.
+        // A capital is not Shift (Caps Lock types one with the source's
+        // modifiers): its shortcut key is the lower case one.
         let capital = event("A", Modifiers::default());
-        assert!(KeyCapture::keys([stroke("shift+a")]).captures(
+        assert!(KeyCapture::keys([stroke("a")]).captures(
             capital.keystroke(Os::Linux).as_ref().unwrap()
+        ));
+        assert!(!KeyCapture::keys([stroke("shift+a")]).captures(
+            capital.keystroke(Os::Linux).as_ref().unwrap()
+        ));
+        let shifted_capital = event(
+            "A",
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        );
+        assert!(KeyCapture::keys([stroke("shift+a")]).captures(
+            shifted_capital.keystroke(Os::Linux).as_ref().unwrap()
         ));
         // A keystroke built with `?` itself is not the US key's shortcut.
         let question_stroke = Keystroke {

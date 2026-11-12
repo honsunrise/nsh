@@ -205,8 +205,9 @@ function MessageBar() {
 两个监听函数都不返回值。聚焦视图上的一个平台事件会沿同一原生窗口内的已启用监听祖先各传播一次，`onKeyDown` 与 `onKeyUp` 都是如此。
 输入源报告的真实释放会到达聚焦视图，即使最初的按下发生在别处（与 DOM 一致）；窗口失去焦点会清除按住状态，不会伪造释放事件。
 
-匹配使用规范的快捷键按键序列：原生键码或 DOM 的 `code` 会把键放回 US 布局；只报告字符的输入源会把 Shift 产生的标点和大写字母
-还原为 US 布局上的键并带上 Shift（`?` 即 `shift+/`），这仅用于匹配；事件中的 `key` 与 `text` 仍保持输入源报告的内容。
+匹配使用规范的快捷键按键序列：原生键码或 DOM 的 `code` 会把键放回 US 布局；只报告字符的输入源会把 Shift 产生的标点
+还原为 US 布局上的键并带上 Shift（`?` 即 `shift+/`），这仅用于匹配；大写字母仍是其小写键，修饰键以输入源为准（Caps Lock 不是 Shift）。
+事件中的 `key` 与 `text` 仍保持输入源报告的内容。
 
 TSX 的 `captureKeys`（`{"none"}`、`{"all"}`，或 `{["mod+k", "escape"]}` 这样的数组），以及 Rust 的
 `capture_keys(KeyCapture::All)` / `capture_keys(KeyCapture::keys(...))`，会在输入到达前挂载消费规则。规则只解析一次，成为规范的快捷键
