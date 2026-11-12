@@ -39,6 +39,8 @@ fn record(where_: &str, event: &KeyEvent) {
     let text = event.text.as_deref().unwrap_or("-");
     let prefix = match where_ {
         "outer" => "outer down",
+        "portal-a" => "portal-a down",
+        "portal-b" => "portal-b down",
         "up" => "up",
         _ => "down",
     };
@@ -108,6 +110,51 @@ fn Pads() -> impl IntoElement {
                 .focusable(true)
                 .element_ref(&second)
                 .on_focus(move |_: &()| record_focus("second")),
+        )
+}
+
+/// One overlay's content: a focusable child with no listener, and the stop
+/// a Tab would reach.
+fn portal_content(child: &'static str, second: &'static str) -> impl IntoElement {
+    overlay().child(
+        view()
+            .w(px(320.0))
+            .h(px(120.0))
+            .p(px(8.0))
+            .gap(px(8.0))
+            .child(view().test_id(child).h(px(40.0)).w_full().focusable(true))
+            .child(view().test_id(second).h(px(40.0)).w_full().focusable(true)),
+    )
+}
+
+/// Two sibling overlays, each portaled to the root while its logical
+/// parent is the container below. Only the focused portal's logical
+/// ancestor hears and captures its keys; the other portal's rules do not.
+#[component]
+fn Portals() -> impl IntoElement {
+    view()
+        .flex_1()
+        .child(
+            view()
+                .test_id("portal-a")
+                .h(px(40.0))
+                .w_full()
+                .capture_keys(KeyCapture::keys([
+                    Keystroke::parse("x", Os::MacOs).expect("x")
+                ]))
+                .on_key_down(move |event: &KeyEvent| record("portal-a", event))
+                .child(portal_content("portal-child", "portal-second")),
+        )
+        .child(
+            view()
+                .test_id("portal-b")
+                .h(px(40.0))
+                .w_full()
+                .capture_keys(KeyCapture::keys([
+                    Keystroke::parse("tab", Os::MacOs).expect("tab")
+                ]))
+                .on_key_down(move |event: &KeyEvent| record("portal-b", event))
+                .child(portal_content("portal-b-child", "portal-b-second")),
         )
 }
 
@@ -493,8 +540,85 @@ pub(super) fn run() {
         happened("down key=A text=A physical=Some(Native(0)) shift=true ctrl=false alt=false cmd=false repeat=false captured=true")
     });
 
+    // Overlays are moved to a root view's host natively while their logical
+    // parent stays the view that contains them: interest and capture follow
+    // `ViewProps::key_parent`, not the native host, and a sibling portal's
+    // rules stay out of the focused portal's ancestry.
+    surface.load(platform::App::Rust(platform::Root::of::<Portals>()));
+    until("the portals' mount", || {
+        view_with_id(&root, "portal-child").is_some()
+            && view_with_id(&root, "portal-b-child").is_some()
+    });
+    // A few batches for the portaled view's props (the routing override).
+    pump(150);
+    let child = view_with_id(&root, "portal-child").expect("the portal child");
+    assert!(
+        window.makeFirstResponder(Some(&*child)),
+        "the focusable child in the overlay takes the focus"
+    );
+    pump(30);
+    send(
+        &window,
+        &event(
+            &window,
+            NSEventType::KeyDown,
+            "x",
+            "x",
+            7,
+            NSEventModifierFlags::empty(),
+            false,
+        ),
+    );
+    until("the portal's logical ancestor", || {
+        recorded("portal-a down key=x ")
+    });
+    let portal = EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|e| e.starts_with("portal-a down key=x "))
+        .cloned();
+    assert!(
+        portal.is_some_and(|line| line.ends_with("captured=true")),
+        "the logical ancestor's capture applies: {:?}",
+        EVENTS.lock().unwrap()
+    );
+    // Tab is not in the focused portal's ancestry's rule (the sibling's
+    // rule names it), so it is reported uncaptured and runs its default.
+    send(
+        &window,
+        &event(
+            &window,
+            NSEventType::KeyDown,
+            "\t",
+            "\t",
+            48,
+            NSEventModifierFlags::empty(),
+            false,
+        ),
+    );
+    until("the uncaptured portal Tab", || {
+        recorded("portal-a down key=Tab ")
+    });
+    let portal_tab = EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|e| e.starts_with("portal-a down key=Tab "))
+        .cloned();
+    assert!(
+        portal_tab.is_some_and(|line| line.ends_with("captured=false")),
+        "the sibling portal's Tab rule does not capture: {:?}",
+        EVENTS.lock().unwrap()
+    );
+    assert!(
+        !recorded("portal-b down"),
+        "the unrelated sibling portal neither hears nor captures: {:?}",
+        EVENTS.lock().unwrap()
+    );
+
     println!(
-        "keyboard: AppKit maps keys, reports them once at the focused view, captures before Tab and menus do"
+        "keyboard: AppKit maps keys, reports them once at the focused view, captures before Tab and menus do, and follows a portaled overlay's logical ancestors"
     );
     surface.stop();
     window.close();

@@ -100,6 +100,8 @@ public class NshView extends FrameLayout {
     final android.util.SparseArray<ShaderFrames> navFrames = new android.util.SparseArray<>();
     private final Mounter mounter;
     private final TouchTracker touches;
+    /** This window's shortcuts, raw keys, capture rules and Tab traversal. */
+    private final KeyDispatch keys;
 
     @Override
     public boolean dispatchTouchEvent(android.view.MotionEvent e) {
@@ -121,26 +123,7 @@ public class NshView extends FrameLayout {
      */
     @Override
     public boolean dispatchKeyEvent(android.view.KeyEvent e) {
-        if (handle != 0) {
-            int action = e.getAction();
-            if (action == android.view.KeyEvent.ACTION_DOWN) {
-                if (keyEvent(e)) return true;
-                boolean tab = isTab(e);
-                if (!tab) tabMoved = false;
-                if (tab && mounter.moveFocus(findFocus(), e.isShiftPressed())) {
-                    tabMoved = true;
-                    return true;
-                }
-            } else if (action == android.view.KeyEvent.ACTION_UP) {
-                boolean consumed = keyEvent(e);
-                if (tabMoved && e.getKeyCode() == android.view.KeyEvent.KEYCODE_TAB) {
-                    tabMoved = false;
-                    return true;
-                }
-                if (consumed) return true;
-            }
-        }
-        return super.dispatchKeyEvent(e);
+        return keys.dispatchKeyEvent(e) || super.dispatchKeyEvent(e);
     }
 
     /**
@@ -149,54 +132,7 @@ public class NshView extends FrameLayout {
      */
     @Override
     public boolean dispatchKeyShortcutEvent(android.view.KeyEvent e) {
-        if (handle != 0 && e.getAction() == android.view.KeyEvent.ACTION_DOWN) {
-            boolean editing = mounter.keyNode(findFocus()) == 0;
-            if (Native.keyShortcut(handle, e.getKeyCode(), e.getUnicodeChar(0), e.getMetaState(),
-                    e.getRepeatCount() > 0, editing)) {
-                return true;
-            }
-        }
-        return super.dispatchKeyShortcutEvent(e);
-    }
-
-    /**
-     * One key down or up: the app's shortcuts first, then (for a managed view with the focus, not
-     * an input or hosted native child) its raw {@code onKeyDown} / {@code onKeyUp} and
-     * {@code captureKeys} rules. The focused node is the view {@code Mounter} focuses, or the root
-     * ({@code ROOT_ID}) when {@code NshView} itself has the focus.
-     */
-    private boolean keyEvent(android.view.KeyEvent e) {
-        View focus = findFocus();
-        int node = mounter.keyNode(focus);
-        // An input or hosted view (a web view, a native component) has the focus: in text, and its
-        // keys stay its own.
-        boolean editing = node == 0;
-        int code = e.getKeyCode(), meta = e.getMetaState();
-        int unicode = e.getUnicodeChar(0);
-        int text = shiftedUnicode(e);
-        int scan = e.getScanCode();
-        if (e.getAction() == android.view.KeyEvent.ACTION_UP) {
-            // A cancelled release reports nothing; its held state goes away.
-            if (e.isCanceled()) return Native.keyCancel(handle, code);
-            return Native.keyUp(handle, code, unicode, text, meta, scan, editing ? 0 : node);
-        }
-        boolean raw = node > 0 && mounter.keyListens(node);
-        boolean captured = raw && mounter.keyCaptured(node, e);
-        return Native.keyDown(handle, code, unicode, text, meta, scan,
-                e.getRepeatCount() > 0, editing, node, captured, raw);
-    }
-
-    /** Plain Tab or Shift+Tab: the app's focus traversal, not Ctrl/Alt/Meta + Tab. */
-    private static boolean isTab(android.view.KeyEvent e) {
-        return e.getKeyCode() == android.view.KeyEvent.KEYCODE_TAB
-                && !e.isCtrlPressed() && !e.isAltPressed() && !e.isMetaPressed();
-    }
-
-    /** What the key types with Shift (its preview and raw `key`): its layout level, not the key without it. */
-    private static int shiftedUnicode(android.view.KeyEvent e) {
-        int text = e.getUnicodeChar(e.getMetaState()
-                & (android.view.KeyEvent.META_SHIFT_ON | android.view.KeyEvent.META_CAPS_LOCK_ON));
-        return text != 0 ? text : e.getUnicodeChar(0);
+        return keys.dispatchKeyShortcutEvent(e) || super.dispatchKeyShortcutEvent(e);
     }
 
     @Override
@@ -204,7 +140,7 @@ public class NshView extends FrameLayout {
         super.onWindowFocusChanged(hasWindowFocus);
         // The window lost the focus: the releases of the keys held may never come.
         if (!hasWindowFocus) {
-            tabMoved = false;
+            keys.focusLost();
             if (handle != 0) Native.keyReset(handle);
         }
     }
@@ -250,6 +186,7 @@ public class NshView extends FrameLayout {
         addView(root, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         touches = new TouchTracker(mounter, this);
         mounter.touchTrackers.add(touches);
+        keys = new KeyDispatch(mounter, root, 1);
         setClipChildren(false);
         // Holds focus when no input does (see InputBox.blur).
         setFocusable(true);
@@ -1075,8 +1012,6 @@ public class NshView extends FrameLayout {
 
     /** The back key's press went to the app (its release does too). */
     private boolean backKeyDown;
-    /** A Tab press moved the managed focus; its release is consumed too. */
-    private boolean tabMoved;
 
     /**
      * The back key, as the window dispatches it without an
@@ -1140,7 +1075,7 @@ public class NshView extends FrameLayout {
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
-        tabMoved = false;
+        keys.focusLost();
         if (handle != 0) Native.keyReset(handle);
         accessibility().removeTouchExplorationStateChangeListener(screenReader);
         if (Lifecycles.registered != null) Lifecycles.registered.views.remove(this);

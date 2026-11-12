@@ -26,7 +26,7 @@ use objc2_ui_kit::{
     UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText,
     UIAccessibilityTraitSummaryElement, UIAccessibilityTraitUpdatesFrequently,
     UIAccessibilityTraits, UIEvent, UIFocusAnimationCoordinator, UIFocusUpdateContext, UIKeyCommand,
-    UIPress, UIPressesEvent, UIResponder, UIView,
+    UIPress, UIPressesEvent, UIResponder, UITapGestureRecognizer, UIView,
 };
 
 use crate::target::EventTarget;
@@ -41,6 +41,9 @@ pub(crate) struct NshViewIvars {
     /// The events the app listens to, which key handling reads without the
     /// mounter (`key_capture` and `on_key_down` / `on_key_up`).
     events: std::cell::Cell<EventMask>,
+    /// A tap that focuses this view when it is `focusable` without taking
+    /// presses (it neither claims nor cancels touches).
+    focus_tap: RefCell<Option<Retained<UITapGestureRecognizer>>>,
     /// The view handles presses: an accessibility element by default, and
     /// "activate" presses it.
     pressable: std::cell::Cell<bool>,
@@ -506,6 +509,39 @@ impl NshView {
     /// The events the app listens to (`MountItem::Events`).
     pub(crate) fn set_events(&self, events: EventMask) {
         self.ivars().events.set(events);
+    }
+
+    /// A `focusable` view that takes no presses has no `PressRecognizer` to
+    /// focus it: a tap recognizer that neither claims nor cancels touches
+    /// gives it the keyboard focus. It is removed once the view stops being
+    /// such a stop (or starts taking presses, which focuses it already).
+    pub(crate) fn update_focus_tap(&self, target: &EventTarget) {
+        let wants = self.is_focus_stop() && !self.takes_presses();
+        let mut kept = self.ivars().focus_tap.borrow_mut();
+        match (&*kept, wants) {
+            (Some(_), true) | (None, false) => {}
+            (None, true) => {
+                // SAFETY: `handleFocusTap:` is implemented by `EventTarget`,
+                // which the mounter keeps alive as long as this view.
+                let tap = unsafe {
+                    UITapGestureRecognizer::initWithTarget_action(
+                        UITapGestureRecognizer::alloc(self.mtm()),
+                        Some(target),
+                        Some(objc2::sel!(handleFocusTap:)),
+                    )
+                };
+                // The view's own press handlers still hear the touches.
+                tap.setCancelsTouchesInView(false);
+                tap.setDelaysTouchesBegan(false);
+                tap.setDelaysTouchesEnded(false);
+                self.addGestureRecognizer(&tap);
+                *kept = Some(tap);
+            }
+            (Some(tap), false) => {
+                self.removeGestureRecognizer(tap);
+                *kept = None;
+            }
+        }
     }
 
     /// The events the app listens to.

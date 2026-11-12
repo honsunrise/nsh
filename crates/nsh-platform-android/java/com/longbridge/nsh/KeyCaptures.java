@@ -69,18 +69,27 @@ final class KeyCaptures {
     /**
      * The canonical key of key code {@code code} and its unshifted
      * character {@code unicode} ({@code KeyEvent.getUnicodeChar(0)}): a
-     * printable layout character (letters lower case), else a named key.
-     * {@code keymap.rs} {@code keystroke} makes the same choice for the
-     * app's shortcuts; Android's key codes are the US layout's, but a
-     * layout typing another character on one keeps that character.
+     * printable ASCII layout character (letters lower case), else the US
+     * key of the Android code, else a named key. {@code keymap.rs}
+     * {@code keystroke} makes the same choice for the app's shortcuts: a
+     * non-ASCII character on a known key keeps that key's US character
+     * (39/'л' is `k`), and an unknown code has no shortcut stroke. The raw
+     * event still reports the actual Unicode character.
      */
     static int eventKey(int code, int unicode) {
-        if (unicode > 0 && !Character.isISOControl(unicode)
-                && Character.isValidCodePoint(unicode)) {
-            // As `Keystroke::parse` canonicalizes: ASCII letters lower
-            // case, every other character as the layout reports it.
-            return unicode >= 'A' && unicode <= 'Z' ? unicode + ('a' - 'A') : unicode;
+        int us = usKey(code);
+        if (us == Integer.MIN_VALUE) return us;
+        if (us >= 0 && us != ' ') {
+            if (unicode > 0x20 && unicode < 0x7f) {
+                return unicode >= 'A' && unicode <= 'Z' ? unicode + ('a' - 'A') : unicode;
+            }
+            return us;
         }
+        return us;
+    }
+
+    /** The US-layout character of Android key code {@code code}, or a named key id; `MIN_VALUE` for none. */
+    private static int usKey(int code) {
         if (code >= 7 && code <= 16) return (int) '0' + (code - 7);
         if (code >= 29 && code <= 54) return (int) 'a' + (code - 29);
         if (code >= 144 && code <= 153) return (int) '0' + (code - 144);
@@ -112,7 +121,6 @@ final class KeyCaptures {
             case 20: return DOWN;
             case 21: return LEFT;
             case 22: return RIGHT;
-            case 23: return ENTER;
             case 131: return FUNCTION_BASE - 1;
             case 132: return FUNCTION_BASE - 2;
             case 133: return FUNCTION_BASE - 3;

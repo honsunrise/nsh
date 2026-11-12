@@ -78,6 +78,18 @@ define_class!(
             }
         }
 
+        /// A tap on a `focusable` view that takes no presses: the non-claiming
+        /// focus recognizer gives it the keyboard focus.
+        #[unsafe(method(handleFocusTap:))]
+        fn handle_focus_tap(&self, recognizer: &UITapGestureRecognizer) {
+            if recognizer.state() != UIGestureRecognizerState::Ended {
+                return;
+            }
+            let Some(view) = recognizer.view() else { return };
+            let id = view.tag() as NodeId;
+            self.with_mounter(move |m| m.focus_node(id));
+        }
+
         #[unsafe(method(handleHover:))]
         fn handle_hover(&self, recognizer: &objc2_ui_kit::UIHoverGestureRecognizer) {
             let Some(view) = recognizer.view() else { return };
@@ -610,6 +622,30 @@ impl EventTarget {
     /// The hardware keys a focused custom view holds, and its modifiers.
     pub(crate) fn keyboard(&self) -> &crate::keyboard::Keyboard {
         &self.ivars().keyboard
+    }
+
+    /// Whether the focused view `id` or a logical ancestor listens to raw
+    /// keys or mounts a capture rule (scroll views included).
+    pub(crate) fn listens_keys(&self, id: NodeId) -> bool {
+        let mtm = self.mtm();
+        match self.ivars().mounter.get(mtm).try_borrow() {
+            Ok(m) => m.as_ref().is_some_and(|m| m.listens_keys(id)),
+            Err(_) => false,
+        }
+    }
+
+    /// Whether the focused view `id` or a logical ancestor captures
+    /// `stroke` under its mounted `capture_keys`.
+    pub(crate) fn captures_stroke(
+        &self,
+        id: NodeId,
+        stroke: Option<&nsh_core::keymap::Keystroke>,
+    ) -> bool {
+        let mtm = self.mtm();
+        match self.ivars().mounter.get(mtm).try_borrow() {
+            Ok(m) => m.as_ref().is_some_and(|m| m.captures_stroke(id, stroke)),
+            Err(_) => false,
+        }
     }
 
     /// The keyboard focus entered or left custom view `id`: the view's

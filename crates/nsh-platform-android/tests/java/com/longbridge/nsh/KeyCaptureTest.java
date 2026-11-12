@@ -43,14 +43,17 @@ public final class KeyCaptureTest {
         check("a function key matches", KeyCaptures.matches(rule, KeyCaptures.FUNCTION_BASE - 5,
                 KeyCaptures.CTRL));
 
-        // The canonical key of an Android event: the layout's unshifted
-        // character, not the physical US one.
+        // The canonical shortcut key of an Android event: the layout's
+        // unshifted ASCII character, else the key's US character; the raw
+        // event keeps the actual Unicode separately.
         check("a plain letter", KeyCaptures.eventKey(29, 'a') == 'a');
         check("AZERTY's a on Q's key", KeyCaptures.eventKey(45, 'a') == 'a');
         check("a capital letter is canonical lower case",
                 KeyCaptures.eventKey(29, 'A') == 'a');
-        check("a non-US letter is kept", KeyCaptures.eventKey(39, 'л') == 'л');
-        check("a capital non-US letter is kept", KeyCaptures.eventKey(39, 'Л') == 'Л');
+        check("a non-US letter keeps its key's US character",
+                KeyCaptures.eventKey(39, 'л') == 'k');
+        check("a capital non-US letter too", KeyCaptures.eventKey(39, 'Л') == 'k');
+        check("a non-US punctuation key too", KeyCaptures.eventKey(76, '÷') == '/');
         check("a shifted punctuation key is its unshifted character",
                 KeyCaptures.eventKey(76, '/') == '/');
         check("space", KeyCaptures.eventKey(62, ' ') == ' ');
@@ -61,6 +64,11 @@ public final class KeyCaptureTest {
         check("F5", KeyCaptures.eventKey(135, 0) == KeyCaptures.FUNCTION_BASE - 5);
         check("an unknown key is no capture id",
                 KeyCaptures.eventKey(1000, 0) == Integer.MIN_VALUE);
+        check("an unknown key stays no capture id with a printable character",
+                KeyCaptures.eventKey(1000, 'x') == Integer.MIN_VALUE);
+        check("a non-US key matches its US shortcut key",
+                KeyCaptures.matches(policy(KeyCaptures.KEYS, 1, 'k', 0),
+                        KeyCaptures.eventKey(39, 'л'), 0));
 
         check("modifiers use the core's wire names",
                 KeyCaptures.modifiers(shift | alt | ctrl | meta) == 0b1111);

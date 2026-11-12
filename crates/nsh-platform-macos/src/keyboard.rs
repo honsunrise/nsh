@@ -29,6 +29,16 @@
 //! [`KeyEvent`] and takes the existing path. Fields, hosted views, menus
 //! and OS-reserved shortcuts keep their own keys.
 //!
+//! Interest and capture follow the logical keyboard ancestry, not the
+//! native view tree: an `Overlay` is moved under a root view's host
+//! natively while its logical parent stays the view that contains it, and
+//! the core marks the moved view's logical parent in
+//! [`nsh_core::ViewProps::key_parent`] (an internal routing field, not an
+//! app-settable prop). [`key_ancestor`] resolves that id through the
+//! surface's mounted views, so a rule on the logical ancestor applies to
+//! the focused view inside the portal and a sibling portal's rules do not.
+//! Focus, hit testing, layout and Tab keep the native parent.
+//!
 //! Direct responder calls (`-[NSView keyDown:]` outside
 //! `-[NSApplication sendEvent:]`, as a synthetic event from `synth`) go
 //! through the same entry points from [`NshView`]'s overrides; the event
@@ -169,13 +179,13 @@ pub(crate) fn key_down(surface: &Surface, event: &NSEvent) -> bool {
     let Some(view) = focused(surface, event) else {
         return false;
     };
-    if !listens(&view) || seen(surface, event) {
+    if !listens(surface, &view) || seen(surface, event) {
         return false;
     }
     // Before the key acts: the focus it moves shows (`focus-visible:`).
     surface.control(|c| c.set_input_modality(InputModality::Keyboard));
     let mut key = key_event(event, Phase::Down);
-    let captured = captures(&view, event);
+    let captured = captures(surface, &view, event);
     key.captured = captured;
     remember(surface, event);
     notify(surface, &view, EventKind::KeyDown, key);
@@ -190,11 +200,11 @@ pub(crate) fn key_up(surface: &Surface, event: &NSEvent) -> bool {
     let Some(view) = focused(surface, event) else {
         return false;
     };
-    if !listens(&view) || seen(surface, event) {
+    if !listens(surface, &view) || seen(surface, event) {
         return false;
     }
     let mut key = key_event(event, Phase::Up);
-    let captured = captures(&view, event);
+    let captured = captures(surface, &view, event);
     key.captured = captured;
     remember(surface, event);
     notify(surface, &view, EventKind::KeyUp, key);
@@ -227,14 +237,14 @@ pub(crate) fn flags_changed(surface: &Surface, event: &NSEvent) {
     let Some(view) = focused(surface, event) else {
         return;
     };
-    if !listens(&view) {
+    if !listens(surface, &view) {
         return;
     }
     let mut key = KeyEvent::default();
     key.key = SharedString::new_static(name);
     key.physical = Some(PhysicalKey::Native(u32::from(event.keyCode())));
     key.modifiers = crate::input::modifiers(event.modifierFlags());
-    key.captured = captures(&view, event);
+    key.captured = captures(surface, &view, event);
     let kind = if down {
         EventKind::KeyDown
     } else {
@@ -297,10 +307,36 @@ fn focused(surface: &Surface, event: &NSEvent) -> Option<NshView> {
     Some(view)
 }
 
-/// Whether `view` or an ancestor hears a raw key event or captures keys:
-/// only then is a [`KeyEvent`] built. A view that hears none takes the
-/// existing path.
-fn listens(view: &NshView) -> bool {
+/// The next view up the keyboard ancestry: the logical parent the core
+/// marked for a portaled view ([`nsh_core::ViewProps::key_parent`]), else
+/// the native parent.
+///
+/// An Overlay is moved to a root view's host natively (`Core::sync_overlays`
+/// inserts it there) while its logical parent stays the view that contains
+/// it. Interest and capture follow that logical ancestry, as the engine's
+/// bubbling does; focus, hit testing and layout keep the native parent.
+/// The override is an internal routing field, not an app-settable prop.
+///
+/// A `key_parent` that does not resolve (an ancestor not mounted) ends the
+/// walk instead of falling back to the native host: the host is not a
+/// logical ancestor, and capturing through it would take an unrelated
+/// view's rule.
+fn key_ancestor(surface: &Surface, view: &NshView) -> Option<NshView> {
+    let logical = view.state().props.key_parent;
+    match logical {
+        Some(id) => surface
+            .mounter
+            .try_borrow()
+            .ok()
+            .and_then(|mounter| mounter.views.get(&id).cloned()),
+        None => view.parent_view(),
+    }
+}
+
+/// Whether `view` or a logical ancestor hears a raw key event or captures
+/// keys: only then is a [`KeyEvent`] built. A view that hears none takes
+/// the existing path.
+fn listens(surface: &Surface, view: &NshView) -> bool {
     let mut current = Some(view.clone());
     while let Some(view) = current {
         {
@@ -311,21 +347,21 @@ fn listens(view: &NshView) -> bool {
                 return true;
             }
         }
-        current = view.parent_view();
+        current = key_ancestor(surface, &view);
     }
     false
 }
 
-/// Whether the focused view or one of its enabled ancestors captures this
-/// transition under the mounted rule ([`KeyCapture`]). A disabled view
-/// captures nothing.
+/// Whether the focused view or one of its enabled logical ancestors
+/// captures this transition under the mounted rule ([`KeyCapture`]). A
+/// disabled view captures nothing.
 ///
 /// The key is matched as the existing shortcut vocabulary names it
 /// ([`crate::keymap::keystroke`]: the virtual key code for named and
 /// function keys, the layout's character for the others, the US layout's
 /// only where the layout types no ASCII), never by a second parser over
 /// the logical name.
-fn captures(view: &NshView, event: &NSEvent) -> bool {
+fn captures(surface: &Surface, view: &NshView, event: &NSEvent) -> bool {
     // A modifier key's `flagsChanged` has no characters to read: only a
     // press or release has a stroke (and `All` captures it regardless).
     let stroke = match event.r#type() {
@@ -342,7 +378,7 @@ fn captures(view: &NshView, event: &NSEvent) -> bool {
             return true;
         }
         drop(state);
-        current = view.parent_view();
+        current = key_ancestor(surface, &view);
     }
     false
 }

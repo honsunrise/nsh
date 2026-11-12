@@ -92,12 +92,15 @@ fn modifiers(key: &UIKey) -> Modifiers {
     }
 }
 
-/// The keystroke of `key` (a `UIKey`), by its key on the US layout.
-fn keystroke(key: &UIKey) -> Option<Keystroke> {
+/// The canonical keystroke of `key` (a `UIKey`), by its key on the US
+/// layout: the shortcut spelling mounted `capture_keys` rules and the app's
+/// keymap both use, whatever character the layout actually reports.
+pub(crate) fn keystroke(key: &UIKey) -> Option<Keystroke> {
     let flags = key.modifierFlags();
     let shift = flags.contains(UIKeyModifierFlags::Shift);
     let typed = key.charactersIgnoringModifiers().to_string();
     let usage = u16::try_from(code(key)).ok()?;
+    let modifiers = modifiers(key);
     let key = match Key::from_hid_usage(usage)? {
         // A key that types a character: the one it types without
         // modifiers. UIKit may leave Shift applied (`?` for Shift+/): then
@@ -109,10 +112,7 @@ fn keystroke(key: &UIKey) -> Option<Keystroke> {
         },
         named => named,
     };
-    Some(Keystroke {
-        modifiers: modifiers(key),
-        key,
-    })
+    Some(Keystroke { modifiers, key })
 }
 
 /// Tells the core a hardware key went down (`focus-visible:`), unless

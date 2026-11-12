@@ -21,10 +21,11 @@
 //! batch (`Mounter.java` keeps it) and matched on the UI thread with
 //! `KeyCaptures.java`, before Android's defaults: the event carries
 //! `captured: true` and `dispatchKeyEvent` returns `true` (no Tab
-//! traversal, back, menu, activation or typed character). A release of a
-//! key whose press was consumed is consumed too, and carries the same
-//! `captured`; releasing, cancelling or losing the window forgets the
-//! held keys (no leaked release state).
+//! traversal, back, menu, activation or typed character). A release is
+//! decided from the focus, listeners and mounted rules at the moment it
+//! arrives (a shortcut whose press it consumed keeps the release
+//! consumed); releasing, cancelling or losing the window forgets the held
+//! keys (no leaked release state).
 //!
 //! Managed views take real focus, not only the root: `focusable={true}`,
 //! or unset on a view that takes presses, is an Android focus stop
@@ -36,10 +37,22 @@
 //! `ref.blur()` focus and blur them; and `FOCUSED`, `onFocus` and
 //! `onBlur` reach the core as for an input.
 //! `NshView` itself is the root stop when no managed view has the focus
-//! (the event goes to [`nsh_core::ROOT_ID`]). An `EditText` or hosted
+//! (the event goes to [`nsh_core::ROOT_ID`]). A `<modal>` dialog window
+//! runs the same dispatch with its own focus, fallback root and Tab order;
+//! a release uses the focus, listeners and capture rules at the moment it
+//! arrives (not the down's decisions). An uncaptured Return or Space down
+//! that later becomes captured on a repeat or release is cleared in the
+//! native view with a cancelled up, so no stale pressed state or click
+//! remains. An `EditText` or hosted
 //! native view (a web view, a video, a native component) keeps its own
 //! keys and its own internal focus, and a press on it does not become a
-//! managed focus.
+//! managed focus. A portaled view (an `Overlay` inserted at the root while
+//! its logical `Node.parent` is elsewhere) carries
+//! `ViewProps.key_parent`; keyboard interest and capture follow that
+//! logical parent (and the mounted host parent), never its physical
+//! Insert parent, and stop at the window's root. That lets a listener or
+//! `captureKeys` on a non-root overlay ancestor apply without involving an
+//! unrelated sibling portal.
 //!
 //! The raw event is the shared [`nsh_core::KeyEvent`]: `key` is the actual
 //! reported Unicode character (preserving case and non-US layouts) or the
@@ -47,9 +60,12 @@
 //! `PageUp`, `F5`, `" "`), `text` is its preview (never committed input
 //! method text), `physical` is `PhysicalKey::Native(scanCode)` only when
 //! Android supplies a scan code, `modifiers` uses the core's wire names
-//! and `repeat` is Android's auto-repeat. The event goes to the focused
+//! and `repeat` is Android's auto-repeat. Capture normalizes like the
+//! app's shortcuts: a printable ASCII layout character wins (letters lower
+//! case), else the Android key code's US character (39/'л' is `k`); the
+//! raw `key` keeps the actual Unicode. The event goes to the focused
 //! managed view's node id, or [`nsh_core::ROOT_ID`] when `NshView` itself
-//! has the focus.
+//! has the focus; a modal's events go to its dialog root.
 //!
 //! Checking a change on an emulator needs a hardware-keyboard-capable AVD
 //! and a dev host:
@@ -65,6 +81,7 @@
 //! app.pressKeys("tab")                      # next managed stop or input
 //! app.pressKeys("shift+tab")                # previous
 //! app.pressKeys("enter")                    # the focused view's Return
+//! # with a <modal> open, keys and Tab act on that dialog window's focus
 //! EOF
 //! ```
 //!
@@ -95,27 +112,13 @@ const META_ALT_ON: i32 = 0x2;
 const META_CTRL_ON: i32 = 0x1000;
 const META_META_ON: i32 = 0x10000;
 
-/// A view's table, and the keys it consumed that are still down.
+/// A view's table, and the keys whose press the table consumed and that
+/// are still down.
 #[derive(Default)]
 pub(crate) struct KeymapState {
     table: Option<Arc<Keymap>>,
     /// Key codes whose press the table consumed.
     held: Vec<i32>,
-    /// Key codes whose press a mounted `capture_keys` rule captured.
-    captured: Vec<i32>,
-    /// Key codes whose raw `KeyDown` was delivered (their release is too).
-    raw: Vec<i32>,
-}
-
-/// What a release (or a cancel) found for its key code.
-#[derive(Clone, Copy, Default)]
-struct Released {
-    /// The press was consumed (by the table or a capture rule).
-    consumed: bool,
-    /// The press was captured.
-    captured: bool,
-    /// A raw `KeyDown` was delivered.
-    raw: bool,
 }
 
 impl KeymapState {
@@ -134,8 +137,6 @@ impl KeymapState {
     /// any more.
     pub(crate) fn reset_keys(&mut self) {
         self.held.clear();
-        self.captured.clear();
-        self.raw.clear();
     }
 
     /// Records that the table consumed key `code`.
@@ -143,36 +144,16 @@ impl KeymapState {
         push_once(&mut self.held, code);
     }
 
-    /// Records that `code`'s `KeyDown` was captured.
-    fn capture(&mut self, code: i32) {
-        push_once(&mut self.captured, code);
-    }
-
-    /// Records that `code`'s raw `KeyDown` was delivered.
-    fn deliver(&mut self, code: i32) {
-        push_once(&mut self.raw, code);
-    }
-
-    /// Removes key `code` from every held set, reporting what its press
-    /// did. A repeated down keeps the state (one release ends every
-    /// repeat).
-    fn release(&mut self, code: i32) -> Released {
-        let released = Released {
-            consumed: remove(&mut self.held, code) || self.captured.contains(&code),
-            captured: self.captured.contains(&code),
-            raw: remove(&mut self.raw, code),
-        };
-        remove(&mut self.captured, code);
-        released
+    /// Removes key `code` from the held keys: `true` when the table
+    /// consumed its press (then its release is consumed too).
+    fn release(&mut self, code: i32) -> bool {
+        remove(&mut self.held, code)
     }
 
     /// Forgets key `code` without reporting a release: `true` when its
     /// press was consumed.
     fn cancel(&mut self, code: i32) -> bool {
-        let held = remove(&mut self.held, code);
-        let captured = remove(&mut self.captured, code);
-        remove(&mut self.raw, code);
-        held || captured
+        remove(&mut self.held, code)
     }
 }
 
@@ -251,9 +232,10 @@ pub(crate) fn capture_modifiers(m: Modifiers) -> i32 {
 
 /// A key went down (`repeat`: an auto-repeat of a held key): whether the
 /// app's shortcuts, or a `capture_keys` rule of the focused view, take it.
-/// `captured` and `raw` are what `KeyCaptures.java` decided
-/// on the UI thread; `focused` is the node that has the focus
-/// (`ROOT_ID` for `NshView`).
+/// `focused` is the node that has the focus (`ROOT_ID` for `NshView`, a
+/// modal's id in its dialog); `window` names the binding window;
+/// `control` says the focused view takes presses ([`Keymap::find_at`]);
+/// `captured`/`raw` are the current mounted decisions.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 extern "system" fn Java_com_longbridge_nsh_Native_keyDown(
@@ -268,13 +250,24 @@ extern "system" fn Java_com_longbridge_nsh_Native_keyDown(
     repeat: jboolean,
     editing: jboolean,
     focused: jint,
+    window: jint,
+    control: jboolean,
     captured: jboolean,
     raw: jboolean,
 ) -> jboolean {
     // SAFETY: Java passes its live handle.
     let host = unsafe { crate::host::host(handle) };
     note_key(host, code);
-    if shortcut(host, code, unicode, meta, editing != 0, repeat != 0) {
+    if shortcut(
+        host,
+        window,
+        code,
+        unicode,
+        meta,
+        editing != 0,
+        control != 0,
+        repeat != 0,
+    ) {
         return JNI_TRUE;
     }
     if raw == 0 || focused <= 0 {
@@ -282,13 +275,6 @@ extern "system" fn Java_com_longbridge_nsh_Native_keyDown(
     }
     let captured = captured != 0;
     let event = key_event(code, unicode, text, meta, scan_code, repeat != 0, true, captured);
-    {
-        let mut state = host.keymap.lock().unwrap_or_else(|e| e.into_inner());
-        state.deliver(code);
-        if captured {
-            state.capture(code);
-        }
-    }
     host.dispatch(
         focused.max(0) as NodeId,
         EventKind::KeyDown,
@@ -298,7 +284,9 @@ extern "system" fn Java_com_longbridge_nsh_Native_keyDown(
 }
 
 /// A key came up (`focused`: the node focused now, 0 when a native child
-/// owns the keys): the raw `KeyUp` goes there when the press was raw.
+/// owns the keys): the release uses the current `captured` and `raw`
+/// decisions, not what its down happened to do. Only a shortcut whose
+/// down it consumed keeps the release consumed on its own.
 #[unsafe(no_mangle)]
 extern "system" fn Java_com_longbridge_nsh_Native_keyUp(
     _: JNIEnv<'_>,
@@ -310,31 +298,42 @@ extern "system" fn Java_com_longbridge_nsh_Native_keyUp(
     meta: jint,
     scan_code: jint,
     focused: jint,
+    captured: jboolean,
+    raw: jboolean,
 ) -> jboolean {
     // SAFETY: Java passes its live handle.
     let host = unsafe { crate::host::host(handle) };
-    let released = {
+    let held = {
         let mut state = host.keymap.lock().unwrap_or_else(|e| e.into_inner());
         state.release(code)
     };
-    if released.raw && focused > 0 {
-        let event = key_event(
-            code,
-            unicode,
-            text,
-            meta,
-            scan_code,
-            false,
-            false,
-            released.captured,
-        );
+    let captured = captured != 0;
+    if release_dispatched(raw != 0, held, focused) {
+        let event = key_event(code, unicode, text, meta, scan_code, false, false, captured);
         host.dispatch(
             focused as NodeId,
             EventKind::KeyUp,
             EventPayload::Key(event),
         );
     }
-    if released.consumed { JNI_TRUE } else { JNI_FALSE }
+    if release_consumed(held, captured) {
+        JNI_TRUE
+    } else {
+        JNI_FALSE
+    }
+}
+
+/// Whether a release at the current focus is delivered raw: the current
+/// focus/ancestry listens and no shortcut consumed the press (a shortcut's
+/// release is consumed without a raw notification).
+fn release_dispatched(raw: bool, held: bool, focused: i32) -> bool {
+    raw && !held && focused > 0
+}
+
+/// Whether a release is consumed: the app's shortcut held the press, or a
+/// mounted capture rule captures the release now.
+fn release_consumed(held: bool, captured: bool) -> bool {
+    held || captured
 }
 
 /// A key's release was cancelled (the system took the gesture): forget it
@@ -397,13 +396,24 @@ extern "system" fn Java_com_longbridge_nsh_Native_keyShortcut(
     code: jint,
     unicode: jint,
     meta: jint,
+    window: jint,
+    control: jboolean,
     repeat: jboolean,
     editing: jboolean,
 ) -> jboolean {
     // SAFETY: Java passes its live handle.
     let host = unsafe { crate::host::host(handle) };
     note_key(host, code);
-    if shortcut(host, code, unicode, meta, editing != 0, repeat != 0) {
+    if shortcut(
+        host,
+        window,
+        code,
+        unicode,
+        meta,
+        editing != 0,
+        control != 0,
+        repeat != 0,
+    ) {
         JNI_TRUE
     } else {
         JNI_FALSE
@@ -419,13 +429,16 @@ fn note_key(host: &crate::host::Host, code: i32) {
     }
 }
 
-/// Whether the table takes key `code` (firing its binding).
+/// Whether the table takes key `code` (firing its binding) in `window`,
+/// where `control` is a focused view that takes presses.
 fn shortcut(
     host: &crate::host::Host,
+    window: i32,
     code: i32,
     unicode: i32,
     meta: i32,
     editing: bool,
+    control: bool,
     repeat: bool,
 ) -> bool {
     let Some(stroke) = keystroke(code, unicode, meta) else {
@@ -436,7 +449,7 @@ fn shortcut(
         let Some(table) = state.table.clone() else {
             return false;
         };
-        let found = table.find(stroke, editing, repeat);
+        let found = table.find_at(window.max(1) as NodeId, stroke, editing, control, repeat);
         if found.consumed() {
             state.consume(code);
         }
@@ -454,9 +467,10 @@ fn shortcut(
 
 /// The shared [`KeyEvent`] of a press or release. Android's key code names
 /// the non-printing keys; `unicode` is the unshifted character the layout
-/// types on it and `text` the character with Shift (what the key reports
-/// and previews), so a non-US or shifted character is never forced onto a
-/// US layout.
+/// types on it and `text` the printable character the source reports with
+/// the modifiers held (a raw `key` and preview; the capture stroke is
+/// normalized separately), so a non-US or shifted character is never
+/// forced onto a US layout.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn key_event(
     code: i32,
@@ -474,17 +488,12 @@ pub(crate) fn key_event(
         .filter(|c| !c.is_control())
         .or_else(|| char::from_u32(unicode.max(0) as u32).filter(|c| !c.is_control()));
     let key = match character {
-        // With Control, Alt or Command the key is the unshifted one (the
-        // combination is a shortcut, not the character it types).
-        Some(c) if !shortcut => c.to_string(),
-        _ => match char::from_u32(unicode.max(0) as u32).filter(|c| !c.is_control()) {
-            Some(c) => c.to_string(),
-            // No character from the layout: the key code's US character
-            // (keypad digits and punctuation), else its DOM name.
-            None => match Key::from_android_keycode(code) {
-                Some(Key::Char(c)) => c.to_string(),
-                _ => named_key(code).unwrap_or_else(|| "Unidentified".into()),
-            },
+        Some(c) => c.to_string(),
+        // No printable character from the source: the key code's US
+        // character (keypad digits and punctuation), else its DOM name.
+        None => match Key::from_android_keycode(code) {
+            Some(Key::Char(c)) => c.to_string(),
+            _ => named_key(code).unwrap_or_else(|| "Unidentified".into()),
         },
     };
     let preview = (down && !shortcut)
@@ -579,10 +588,13 @@ mod tests {
         assert_eq!(&*question.key, "?");
         assert_eq!(question.text.as_deref(), Some("?"));
 
-        // A non-US layout keeps its character both ways.
+        // A non-US layout keeps its character both ways; capture normalizes
+        // it to the key's US shortcut (`k`) in KeyCaptures.
         let cyrillic = key_event(39, 'л' as i32, 'Л' as i32, META_SHIFT_ON, 0, false, true, false);
         assert_eq!(&*cyrillic.key, "Л");
         assert_eq!(cyrillic.text.as_deref(), Some("Л"));
+        let cyrillic_plain = key_event(39, 'л' as i32, 'л' as i32, 0, 0, false, true, false);
+        assert_eq!(&*cyrillic_plain.key, "л");
 
         let left = key_event(21, 0, 0, 0, 0, false, true, false);
         assert_eq!(&*left.key, "ArrowLeft");
@@ -593,11 +605,17 @@ mod tests {
         assert_eq!(enter.text, None);
         assert!(enter.repeat);
 
-        // A shortcut reports the unshifted key and no text.
+        // A shortcut still reports the source's printable character
+        // (Shift+A's `A`), and previews none.
         let all = key_event(29, 'a' as i32, 'A' as i32, META_CTRL_ON | META_SHIFT_ON, 0, false, true, true);
-        assert_eq!(&*all.key, "a");
+        assert_eq!(&*all.key, "A");
         assert_eq!(all.text, None);
         assert!(all.modifiers.ctrl && all.modifiers.shift && all.captured);
+
+        // AltGr or Alt can report a composed printable source character.
+        let composed = key_event(33, 'e' as i32, '€' as i32, META_ALT_ON, 0, false, true, false);
+        assert_eq!(&*composed.key, "€");
+        assert_eq!(composed.text, None);
 
         // The scan code is the physical key only when Android supplies one.
         assert_eq!(key_event(29, 'a' as i32, 'a' as i32, 0, 30, false, true, false).physical,
@@ -612,35 +630,45 @@ mod tests {
     }
 
     #[test]
+    fn a_release_uses_the_current_focus_and_capture() {
+        // The down was on a view that heard nothing; the release reaches
+        // the focused view that listens now.
+        assert!(release_dispatched(true, false, 7));
+        assert!(release_consumed(false, true));
+        // A shortcut's press owns its release, without a raw notification.
+        assert!(!release_dispatched(true, true, 7));
+        assert!(release_consumed(true, false));
+        // No current listener/capture and no held shortcut: the native view
+        // gets the release.
+        assert!(!release_dispatched(false, false, 7));
+        assert!(!release_consumed(false, false));
+        // A native child (0) owns the release.
+        assert!(!release_dispatched(true, false, 0));
+    }
+
+    #[test]
     fn a_release_forgets_only_its_key() {
         let mut state = KeymapState::default();
         state.consume(29);
-        state.capture(30);
-        state.deliver(30);
-        state.deliver(31);
+        state.consume(30);
+        // A repeated down does not duplicate the held state.
+        state.consume(30);
+        assert_eq!(state.held.iter().filter(|c| **c == 30).count(), 1);
 
-        let released = state.release(30);
-        assert!(released.consumed && released.captured && released.raw);
+        assert!(state.release(30));
         assert!(state.held.contains(&29));
-        assert!(state.raw.contains(&31));
+        assert!(state.release(29));
+        assert!(!state.release(29));
+        assert!(state.held.is_empty());
 
-        let other = state.release(29);
-        assert!(other.consumed && !other.captured && !other.raw);
-        assert!(!state.held.contains(&29));
-
-        // A repeated down does not duplicate the state, and a cancel
-        // reports what its press did without a `KeyUp`.
-        state.deliver(31);
-        state.capture(31);
-        assert_eq!(state.raw.iter().filter(|c| **c == 31).count(), 1);
+        // A cancel reports what its press did without a `KeyUp`.
+        state.consume(31);
         assert!(state.cancel(31));
-        assert!(!state.release(31).consumed);
+        assert!(!state.release(31));
 
         state.consume(32);
-        state.capture(33);
-        state.deliver(33);
         state.reset_keys();
-        assert!(state.held.is_empty() && state.captured.is_empty() && state.raw.is_empty());
+        assert!(state.held.is_empty());
     }
 
     #[test]
