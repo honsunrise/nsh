@@ -216,6 +216,12 @@ fn happened(recorded: &str) -> bool {
     EVENTS.lock().unwrap().iter().any(|e| e == recorded)
 }
 
+/// Whether a record starts with `prefix` (a wait that does not spell out
+/// every field, as `record` always appends them).
+fn recorded(prefix: &str) -> bool {
+    EVENTS.lock().unwrap().iter().any(|e| e.starts_with(prefix))
+}
+
 #[allow(clippy::field_reassign_with_default)]
 pub(super) fn run() {
     let mtm = MainThreadMarker::new().unwrap();
@@ -276,7 +282,7 @@ pub(super) fn run() {
             false,
         ),
     );
-    until("the plain key", || happened("up key=a"));
+    until("the plain key", || recorded("up key=a "));
     let plain = "down key=a text=a physical=Some(Native(0)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false";
     assert!(happened(plain), "the plain press: {:?}", EVENTS.lock().unwrap());
     assert!(
@@ -406,6 +412,19 @@ pub(super) fn run() {
         happened("up key=Shift text=- physical=Some(Native(56)) shift=true ctrl=false alt=false cmd=false repeat=false captured=false")
             && happened("up key=Shift text=- physical=Some(Native(60)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false")
     });
+
+    // A release whose press was never tracked (the app lost the focus, or
+    // the press happened in another app) follows its cleared flag: it is a
+    // KeyUp, never a KeyDown that reports the modifier as off.
+    send_flags(&window, &first, 61, NSEventModifierFlags::empty());
+    until("the untracked Option release", || {
+        happened("up key=Alt text=- physical=Some(Native(61)) shift=false ctrl=false alt=false cmd=false repeat=false captured=false")
+    });
+    assert!(
+        !recorded("down key=Alt "),
+        "no invented press for an untracked release: {:?}",
+        EVENTS.lock().unwrap()
+    );
 
     // A mounted capture on the focused view's ancestor takes Tab before
     // the platform's traversal runs: the focus stays where it is.

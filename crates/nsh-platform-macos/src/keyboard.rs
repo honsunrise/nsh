@@ -90,14 +90,16 @@ impl Drop for KeyboardState {
     }
 }
 
-/// Which event a [`KeyEvent`] was made of: its object, type, number and
-/// time. AppKit passes the same `NSEvent` object to the monitor and then
-/// down the responder chain; this recognizes that second arrival.
+/// Which event a [`KeyEvent`] was made of: its object, type, virtual key
+/// code and time. AppKit passes the same `NSEvent` object to the monitor
+/// and then down the responder chain; this recognizes that second arrival.
+/// Only properties every key event has are read: `eventNumber` is the
+/// mouse and tracking events' and raises for a key event.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Mark {
     event: usize,
     kind: NSEventType,
-    number: isize,
+    code: u16,
     time: f64,
 }
 
@@ -106,7 +108,7 @@ impl Mark {
         Mark {
             event: event as *const NSEvent as usize,
             kind: event.r#type(),
-            number: event.eventNumber(),
+            code: event.keyCode(),
             time: event.timestamp(),
         }
     }
@@ -324,7 +326,12 @@ fn listens(view: &NshView) -> bool {
 /// only where the layout types no ASCII), never by a second parser over
 /// the logical name.
 fn captures(view: &NshView, event: &NSEvent) -> bool {
-    let stroke = crate::keymap::keystroke(event);
+    // A modifier key's `flagsChanged` has no characters to read: only a
+    // press or release has a stroke (and `All` captures it regardless).
+    let stroke = match event.r#type() {
+        NSEventType::KeyDown | NSEventType::KeyUp => crate::keymap::keystroke(event),
+        _ => None,
+    };
     let mut current = Some(view.clone());
     while let Some(view) = current {
         let state = view.state();
@@ -485,8 +492,14 @@ fn modifier_name(code: u16) -> Option<&'static str> {
 }
 
 /// Records `event`'s modifier transition and returns the key's name and
-/// whether it went down: a code not held is a press, a held one its
-/// release. AppKit reports the modifier keys only this way.
+/// whether it went down. AppKit reports the modifier keys only this way.
+///
+/// A modifier's direction comes from its own flag, which is set while the
+/// modifier is held: a transition without it is a release even when its
+/// press was never tracked (after losing the app's focus, or in another
+/// surface). A transition with the flag set is a press unless this key
+/// code is already held (the release of one Shift while the other is).
+/// Caps Lock toggles, so the event that changes its flag is its press.
 fn modifier_transition(surface: &Surface, event: &NSEvent) -> Option<(&'static str, bool)> {
     let code = event.keyCode();
     let name = modifier_name(code)?;
@@ -500,13 +513,14 @@ fn modifier_transition(surface: &Surface, event: &NSEvent) -> Option<(&'static s
         let on = flags.contains(NSEventModifierFlags::CapsLock);
         on != surface.keyboard.caps.replace(on)
     } else {
+        let held_by = modifier_flag(code)?;
         let mut held = surface.keyboard.modifiers.borrow_mut();
-        if held.remove(&code) {
-            false
-        } else {
+        let was = held.remove(&code);
+        let down = flags.contains(held_by) && !was;
+        if down {
             held.insert(code);
-            true
         }
+        down
     };
     Some((name, down))
 }
@@ -551,7 +565,9 @@ fn notify(surface: &Surface, view: &NshView, kind: EventKind, key: KeyEvent) {
 }
 
 /// Whether this event was already reported (the monitor reported it, and
-/// AppKit then handed it to the responder too).
+/// AppKit then handed it to the responder too). The mark stays through the
+/// responder chain, so a key bubbled to several NSH views is not reported
+/// at each of them.
 fn seen(surface: &Surface, event: &NSEvent) -> bool {
     surface.keyboard.last.get() == Some(Mark::of(event))
 }

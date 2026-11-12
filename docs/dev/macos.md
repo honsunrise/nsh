@@ -306,9 +306,11 @@ Modifier keys do not produce `keyDown`/`keyUp`: AppKit sends `flagsChanged` with
 flags after the transition. Each change is reported as a named `KeyDown`/`KeyUp` (`Shift`, `Control`, `Alt`, `Meta`,
 `CapsLock`, `Fn`), with the physical code and no text. `keyboard.rs` keeps the modifier codes held, so releasing one
 Shift while the other is held reports that release, and a press is never reported twice. Caps Lock toggles rather than
-holding: each `flagsChanged` that changes its flag is its press, one that does not is its release. A focus move inside
-the app keeps the tracked modifiers (AppKit still reports their releases to the new first responder); only losing the
-app's focus (`NSApplicationDidResignActive`) drops them, and no release is made up. A release AppKit delivers is
+holding: each `flagsChanged` that changes its flag is its press, one that does not is its release. A modifier transition
+without its own flag is a release even when its press was never tracked (after losing the app's focus, or a press made
+in another app); a press always carries its flag, so a reported key-down never says the modifier is off. A focus move
+inside the app keeps the tracked modifiers (AppKit still reports their releases to the new first responder); only losing
+the app's focus (`NSApplicationDidResignActive`) drops them, and no release is made up. A release AppKit delivers is
 reported on whichever focused view has it by then. Keys pressed before the app launched, or released while another
 app was in front, have no transition to report.
 
@@ -647,9 +649,10 @@ NSH_KEYBOARD_CHECK_ONLY=1 cargo test -p nsh-platform-macos --features dev --test
 `tests/native/keyboard.rs` mounts two focusable pads in a real window and sends `NSEvent`s to it. It checks the
 mapping a listener receives (a plain `a` with physical code 0, Shift+A keeping its case, Option+A keeping the layout's
 `å`, Enter / ArrowLeft / F5 by virtual key code, `isARepeat`), that the press reaches the focused view and its
-enclosing listener once, Shift's `flagsChanged` down/up with two Shift keys, `captureKeys: "all"` taking Tab and
-leaving the focus, an uncaptured Tab moving it, and a named capture matching `shift+a` through the shortcut
-vocabulary. Menus' key equivalents under a capture and the input method are not in it.
+enclosing listener once, Shift's `flagsChanged` down/up with two Shift keys, a release whose press was never tracked
+classified from its cleared flag, `captureKeys: "all"` taking Tab and leaving the focus, an uncaptured Tab moving it,
+and a named capture matching `shift+a` through the shortcut vocabulary. Menus' key equivalents under a capture and the
+input method are not in it.
 
 For a real surface, with a window server and a keyboard:
 
