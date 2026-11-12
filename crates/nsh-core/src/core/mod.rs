@@ -617,6 +617,9 @@ struct Node {
     /// to when its style was last applied ([`Core::sync_env`]).
     env: Option<Box<(crate::style::EnvEdges, [EdgeInsets; 2])>>,
     events: EventMask,
+    /// Keyboard ancestry for a portaled view: its logical parent, when the
+    /// native parent it is inserted into differs (`sync_key_parents`).
+    key_parent: Option<NodeId>,
     /// `zIndex`: native views are ordered by it (stable) among siblings.
     z_index: i32,
     /// `verticalAlign`: where it sits in its line as an attachment.
@@ -846,6 +849,7 @@ impl Node {
             .as_ref()
             .and_then(|root| root.overlay.as_ref())
             .and_then(|overlay| overlay.tab_after);
+        props.key_parent = self.key_parent;
         if props.pointer_events == crate::props::PointerEvents::Auto {
             props.pointer_events = self.class_pointer;
         }
@@ -915,6 +919,7 @@ impl Node {
             insets: None,
             env: None,
             events: EventMask::default(),
+            key_parent: None,
             z_index: 0,
             vertical_align: crate::style::VerticalAlign::Baseline,
             rtl: false,
@@ -1265,6 +1270,10 @@ pub struct Core<M: TextEngine> {
     /// The tree changed: the shown overlays' places in the Tab order are
     /// found again ([`Core::order_overlays_for_tab`]).
     tab_places_stale: bool,
+    /// A key listener or capture rule changed, or an overlay moved in:
+    /// the shown overlays' `key_parent` overrides are found again
+    /// ([`Core::sync_key_parents`]).
+    key_ancestry_dirty: bool,
     /// Mount the states nodes show as parts of a control
     /// ([`MountItem::ProjectStates`]).
     mount_projected: bool,
@@ -1549,6 +1558,7 @@ impl<M: TextEngine> Core<M> {
             track_tree_order: false,
             tree_order_changed: false,
             tab_places_stale: false,
+            key_ancestry_dirty: false,
             mount_projected: false,
             batches: 0,
             commands: Vec::new(),
@@ -2435,9 +2445,13 @@ impl<M: TextEngine> Core<M> {
                     self.report_frame(key);
                 }
                 let node = &self.nodes[key as usize];
+                let key_events = matches!(event, EventKind::KeyDown | EventKind::KeyUp);
                 if node.events != before {
                     let relink = node.inline && (pressable(before) || pressable(node.events));
                     self.mark(key, dirty::EVENTS);
+                    if key_events {
+                        self.key_ancestry_dirty = true;
+                    }
                     // Pressable spans are part of their block's text.
                     if relink {
                         self.mark_text_block(key);
@@ -3047,6 +3061,9 @@ impl<M: TextEngine> Core<M> {
         self.sync_ch();
         self.sync_fixed();
         self.sync_overlays();
+        if std::mem::take(&mut self.key_ancestry_dirty) {
+            self.sync_key_parents();
+        }
         // The rows holding the focus or an open overlay stay rendered,
         // before the lists update their windows.
         if self.focus.is_some() || !self.overlays.is_empty() || !self.kept_lists.is_empty() {
@@ -5058,6 +5075,7 @@ impl<M: TextEngine> Core<M> {
         }
         let node = &mut self.nodes[key as usize];
         let mut flags = 0;
+        let mut key_ancestry = false;
         let mut rebuild_span = false;
         match prop {
             Prop::Source(source) => {
@@ -5606,6 +5624,7 @@ impl<M: TextEngine> Core<M> {
                 if props.key_capture != value {
                     props.key_capture = value;
                     flags |= dirty::VIEW_PROPS;
+                    key_ancestry = true;
                 }
             }
             Prop::SelectableView(value) => {
@@ -6025,6 +6044,9 @@ impl<M: TextEngine> Core<M> {
         if rebuild_span {
             self.mark_text_block(key);
         }
+        if key_ancestry {
+            self.key_ancestry_dirty = true;
+        }
         Ok(())
     }
 
@@ -6106,6 +6128,10 @@ impl<M: TextEngine> Core<M> {
             self.set_hidden_in_text(child, false);
         }
         self.nodes[child as usize].parent = parent;
+        if self.nodes[child as usize].kind == Kind::Overlay {
+            // Its logical parent changed: find its keyboard override again.
+            self.key_ancestry_dirty = true;
+        }
         self.nodes[parent as usize].children.insert(pos, child);
         self.rank_noted(child);
         self.tree_order_changed |= self.track_tree_order;

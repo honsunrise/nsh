@@ -24710,6 +24710,12 @@ fn key_interest_walks_portaled_overlay_logical_ancestors() {
                     .capture_keys(KeyCapture::All)
                     .child(popup()),
             )
+            .child(
+                view()
+                    .test_id("listener")
+                    .on_key_down(|_: &KeyEvent| {})
+                    .child(overlay().child(view().test_id("heard").focusable(true))),
+            )
             .child(overlay().child(view().test_id("outside").focusable(true)))
     }
 
@@ -24728,10 +24734,38 @@ fn key_interest_walks_portaled_overlay_logical_ancestors() {
             })
             .unwrap_or_else(|| panic!("{wanted} is mounted"))
     };
-    // The overlay's content is not a DOM child of the capturing view, but
-    // it is its logical descendant in the core's tree.
-    assert!(c.key_interest(view("inside")));
-    assert!(!c.key_interest(view("outside")));
+    let (holder, inside, heard, outside) = (
+        view("holder"),
+        view("inside"),
+        view("heard"),
+        view("outside"),
+    );
+    // The overlay content is not a native child of the view it is in, but
+    // it is its logical descendant: interest and capture follow the
+    // logical ancestor, and never the unrelated sibling portal.
+    assert!(c.key_interest(inside));
+    assert!(c.key_interest(heard));
+    assert!(!c.key_interest(outside));
+    assert!(c.key_captured(inside, None));
+    assert!(!c.key_captured(outside, None));
+    // The engine's notification path keeps the same logical ancestor.
+    let mut path = Vec::new();
+    c.key_path(inside, &mut path);
+    assert!(path.contains(&holder), "{path:?}");
+    // The overlays whose logical ancestry has key interest carry the
+    // routing override; the unrelated one carries none.
+    let overrides: Vec<_> = batch
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            MountItem::ViewProps { props, .. } if props.key_parent.is_some() => props.key_parent,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(overrides.len(), 2, "{overrides:?}");
+    assert!(overrides.contains(&Some(holder)));
+    assert!(overrides.contains(&Some(view("listener"))));
+    assert!(!overrides.contains(&Some(outside)));
 }
 
 #[test]

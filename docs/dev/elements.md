@@ -380,7 +380,11 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   whose keymap vocabulary is richer than the physical code (Win32's virtual key, GTK's layout groups) builds the
   canonical stroke itself and passes it to `captures_key`; `PhysicalKey` stays the source's real identity
   (`Native` is a Windows scan code with its extended bit, an AppKit key code, a HID usage, a GTK keycode or an
-  Android scan code; `Code` is the DOM's). Native
+  Android scan code; `Code` is the DOM's). A native adapter walks interest and capture along
+  `ViewProps::key_parent` when it is set: an overlay's native view is inserted in its root view while its logical
+  parent is the view the app put it in, and only the logical ancestry may hear the key. The override is internal
+  routing data (never an app prop), set by the core only for portals whose logical ancestry has a key listener or
+  capture rule; native focus, hit testing and layout keep the platform parent. Native
   backends decide `captured` from their mounted props before defaults; an in-process host (the browser) calls
   `LocalEngine::key_event`, which computes and routes synchronously. A focused native text input keeps the keys
   that edit it (nothing an ancestor captures intercepts its typing or editing). A legacy terminal reports only

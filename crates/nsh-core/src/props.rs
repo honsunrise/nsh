@@ -455,6 +455,13 @@ pub struct ViewProps {
     /// defaults run. Linux decides from the mounted rules without waiting
     /// for a listener (`Interactive::capture_keys`).
     pub key_capture: crate::KeyCapture,
+    /// Where keyboard ancestry continues for a portaled view (an overlay
+    /// whose native parent is its root view while its logical parent is
+    /// the view it is in): the logical parent's node id. Internal routing
+    /// only; native layout, focus and hit testing keep their parent. `None`
+    /// for ordinary views and for portals with no key listener or capture
+    /// rule on their logical ancestry.
+    pub key_parent: Option<crate::NodeId>,
     /// The view is a selectable view (`View`'s `selectable`): the
     /// texts in its subtree that are not `selectable={false}` share one
     /// selection, from text to text ([`crate::selection`]); an area inside
