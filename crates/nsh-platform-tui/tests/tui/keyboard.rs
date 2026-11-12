@@ -1355,7 +1355,9 @@ fn CapturedTabPage() -> impl IntoElement {
     let heard = signal(String::from("none"));
     view()
         .flex_1()
-        .capture_keys(KeyCapture::keys([Keystroke::parse("tab", Os::Linux).unwrap()]))
+        .capture_keys(KeyCapture::keys([
+            Keystroke::parse("tab", Os::Linux).unwrap()
+        ]))
         .on_key_down(move |event: &KeyEvent| {
             heard.set(format!("{} {}", event.key.as_str(), event.captured))
         })
@@ -1376,7 +1378,12 @@ fn CapturedTabPage() -> impl IntoElement {
                 .child(text("second")),
         )
         .child(text(move || {
-            format!("focused {} {} heard {}", first.get(), second.get(), heard.get())
+            format!(
+                "focused {} {} heard {}",
+                first.get(),
+                second.get(),
+                heard.get()
+            )
         }))
 }
 
@@ -1592,14 +1599,6 @@ fn another_portals_capture_does_not_take_a_sibling_portals_keys() {
     draw_until(&mut view, &mut terminal, &rx, "focused sibling");
     // The focus is in the page's own portal: the other portal's capture
     // rule is not an ancestor of it.
-    assert_eq!(
-        view.handle(key("a", Default::default())),
-        Handled::Ignored
-    );
-    draw_until(
-        &mut view,
-        &mut terminal,
-        &rx,
-        "focused sibling heard none",
-    );
+    assert_eq!(view.handle(key("a", Default::default())), Handled::Ignored);
+    draw_until(&mut view, &mut terminal, &rx, "focused sibling heard none");
 }

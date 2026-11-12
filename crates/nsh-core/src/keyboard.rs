@@ -109,11 +109,7 @@ impl KeyEvent {
     /// ([`KeyCapture::captures_key`]). `os` names what the numeric code
     /// means; a browser passes [`Os::Web`] and its DOM codes.
     pub fn keystroke(&self, os: Os) -> Option<Keystroke> {
-        if let Some(key) = self
-            .physical
-            .as_ref()
-            .and_then(|physical| physical.key(os))
-        {
+        if let Some(key) = self.physical.as_ref().and_then(|physical| physical.key(os)) {
             return Some(Keystroke {
                 modifiers: self.modifiers,
                 key,
@@ -437,7 +433,11 @@ mod tests {
                 physical: Some(PhysicalKey::Code(code.into())),
                 ..Default::default()
             };
-            assert_eq!(event.keystroke(Os::Web).map(|k| k.key), Some(expected), "{code}");
+            assert_eq!(
+                event.keystroke(Os::Web).map(|k| k.key),
+                Some(expected),
+                "{code}"
+            );
         }
         let unknown = KeyEvent {
             physical: Some(PhysicalKey::Code("IntlBackslash".into())),
@@ -461,28 +461,34 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(KeyCapture::keys([stroke("shift+/")]).captures(&slash.keystroke(Os::Linux).unwrap()));
+        assert!(
+            KeyCapture::keys([stroke("shift+/")]).captures(&slash.keystroke(Os::Linux).unwrap())
+        );
         // A source that reports only the character it typed (`?`, no
         // physical code) is placed back on its US key with Shift for
         // matching; the event keeps the character it reported.
         let question = event("?", Modifiers::default());
         assert_eq!(question.key.as_str(), "?");
-        assert!(KeyCapture::keys([stroke("shift+/")]).captures(
-            question.keystroke(Os::Linux).as_ref().unwrap()
-        ));
+        assert!(
+            KeyCapture::keys([stroke("shift+/")])
+                .captures(question.keystroke(Os::Linux).as_ref().unwrap())
+        );
         let bang = event("!", Modifiers::default());
-        assert!(KeyCapture::keys([stroke("shift+1")]).captures(
-            bang.keystroke(Os::Linux).as_ref().unwrap()
-        ));
+        assert!(
+            KeyCapture::keys([stroke("shift+1")])
+                .captures(bang.keystroke(Os::Linux).as_ref().unwrap())
+        );
         // A capital is not Shift (Caps Lock types one with the source's
         // modifiers): its shortcut key is the lower case one.
         let capital = event("A", Modifiers::default());
-        assert!(KeyCapture::keys([stroke("a")]).captures(
-            capital.keystroke(Os::Linux).as_ref().unwrap()
-        ));
-        assert!(!KeyCapture::keys([stroke("shift+a")]).captures(
-            capital.keystroke(Os::Linux).as_ref().unwrap()
-        ));
+        assert!(
+            KeyCapture::keys([stroke("a")])
+                .captures(capital.keystroke(Os::Linux).as_ref().unwrap())
+        );
+        assert!(
+            !KeyCapture::keys([stroke("shift+a")])
+                .captures(capital.keystroke(Os::Linux).as_ref().unwrap())
+        );
         let shifted_capital = event(
             "A",
             Modifiers {
@@ -490,16 +496,18 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(KeyCapture::keys([stroke("shift+a")]).captures(
-            shifted_capital.keystroke(Os::Linux).as_ref().unwrap()
-        ));
+        assert!(
+            KeyCapture::keys([stroke("shift+a")])
+                .captures(shifted_capital.keystroke(Os::Linux).as_ref().unwrap())
+        );
         // A keystroke built with `?` itself is not the US key's shortcut.
         let question_stroke = Keystroke {
             key: ShortcutKey::Char('?'),
             modifiers: Modifiers::default(),
         };
-        assert!(!KeyCapture::keys([question_stroke]).captures(
-            question.keystroke(Os::Linux).as_ref().unwrap()
-        ));
+        assert!(
+            !KeyCapture::keys([question_stroke])
+                .captures(question.keystroke(Os::Linux).as_ref().unwrap())
+        );
     }
 }

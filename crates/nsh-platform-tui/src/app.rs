@@ -1052,7 +1052,15 @@ impl AppView {
             let Some((id, captured)) = self.raw_target(stroke.as_ref()) else {
                 return Handled::Ignored;
             };
-            self.notify_key(id, key, modifiers, stroke.as_ref(), Phase::Up, captured, &control);
+            self.notify_key(
+                id,
+                key,
+                modifiers,
+                stroke.as_ref(),
+                Phase::Up,
+                captured,
+                &control,
+            );
             return if captured {
                 Handled::Yes
             } else {
@@ -1085,7 +1093,15 @@ impl AppView {
         if let Some(phase) = phase
             && let Some((id, captured)) = self.raw_target(stroke.as_ref())
         {
-            self.notify_key(id, key, modifiers, stroke.as_ref(), phase, captured, &control);
+            self.notify_key(
+                id,
+                key,
+                modifiers,
+                stroke.as_ref(),
+                phase,
+                captured,
+                &control,
+            );
             if captured {
                 return Handled::Yes;
             }
@@ -1112,8 +1128,7 @@ impl AppView {
                 || crate::key_scheme::arrow(stroke).is_some_and(|arrow| {
                     self.keyboard
                         .shortcut(&self.tree, arrow, repeat, command_key, &control)
-                }))
-        {
+                })) {
             Handled::Yes
         } else if let Some(stroke) = stroke
             && let Some(crate::key_scheme::Action::Search(forward)) =

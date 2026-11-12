@@ -99,13 +99,7 @@ fn keyboard_parent(surface: &Surface, view: &NshView) -> Option<NshView> {
     let Some(id) = ({ view.state().props.key_parent }) else {
         return view.parent_view();
     };
-    let parent = surface
-        .mounter
-        .try_borrow()
-        .ok()?
-        .views
-        .get(&id)
-        .cloned()?;
+    let parent = surface.mounter.try_borrow().ok()?.views.get(&id).cloned()?;
     (parent.id() != view.id() && parent.root() == view.root()).then_some(parent)
 }
 
@@ -162,10 +156,7 @@ pub(crate) fn captures(
     while let Some(view) = current {
         let state = view.state();
         if !state.props.accessibility.state.disabled
-            && state
-                .props
-                .key_capture
-                .captures_key(stroke.as_ref())
+            && state.props.key_capture.captures_key(stroke.as_ref())
         {
             return true;
         }
@@ -293,15 +284,7 @@ pub(crate) fn released(
     }
     // The view focused now hears the release, even when the press went to
     // another view; its capture decision is the mounted policy now.
-    let mut event = key_event(
-        surface,
-        view,
-        keyval,
-        keycode,
-        state,
-        KeyPhase::Up,
-        group,
-    );
+    let mut event = key_event(surface, view, keyval, keycode, state, KeyPhase::Up, group);
     event.captured = captures(surface, view, &event, keycode, state, group);
     notify(surface, view, EventKind::KeyUp, event);
 }
@@ -525,9 +508,7 @@ fn logical_key(keyval: gdk::Key) -> SharedString {
                 return SharedString::from(c.to_string());
             }
             return match keyval.name() {
-                Some(name) if name.as_str() == "VoidSymbol" => {
-                    SharedString::from("Unidentified")
-                }
+                Some(name) if name.as_str() == "VoidSymbol" => SharedString::from("Unidentified"),
                 Some(name) if name.as_str().starts_with("dead_") => SharedString::from("Dead"),
                 Some(name) => SharedString::from(name.to_string()),
                 None => SharedString::from("Unidentified"),
@@ -662,8 +643,7 @@ mod tests {
                 numeric.physical,
                 Some(nsh_core::PhysicalKey::Native(keycode))
             );
-            let capture =
-                nsh_core::KeyCapture::keys([Keystroke::parse_with("1", false).unwrap()]);
+            let capture = nsh_core::KeyCapture::keys([Keystroke::parse_with("1", false).unwrap()]);
             let stroke =
                 shortcut_stroke(&view, &numeric, keycode, numlock, 0).expect("a shortcut key");
             assert!(capture.captures(&stroke));
@@ -678,14 +658,9 @@ mod tests {
             );
             assert_eq!(navigation.key, "End");
             assert_eq!(navigation.text, None);
-            let stroke = shortcut_stroke(
-                &view,
-                &navigation,
-                keycode,
-                gdk::ModifierType::empty(),
-                0,
-            )
-            .expect("End is a shortcut key");
+            let stroke =
+                shortcut_stroke(&view, &navigation, keycode, gdk::ModifierType::empty(), 0)
+                    .expect("End is a shortcut key");
             assert!(!capture.captures(&stroke));
         });
     }
@@ -695,7 +670,10 @@ mod tests {
     #[test]
     fn an_unmapped_key_keeps_what_the_source_reports() {
         crate::gtk_test::run(|| {
-            assert_eq!(super::logical_key(gtk4::gdk::Key::VoidSymbol), "Unidentified");
+            assert_eq!(
+                super::logical_key(gtk4::gdk::Key::VoidSymbol),
+                "Unidentified"
+            );
             assert_eq!(super::logical_key(gtk4::gdk::Key::dead_acute), "Dead");
             let mut event = KeyEvent::default();
             event.key = super::logical_key(gtk4::gdk::Key::dead_acute);

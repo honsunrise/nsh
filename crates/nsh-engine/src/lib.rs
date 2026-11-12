@@ -1922,16 +1922,13 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
         let _context = self.driver.context.enter();
         let captured = match &mut payload {
             EventPayload::Key(event) => {
-                event.captured = self
-                    .driver
-                    .state
-                    .core
-                    .key_captured(id, stroke.as_ref());
+                event.captured = self.driver.state.core.key_captured(id, stroke.as_ref());
                 event.captured
             }
             _ => false,
         };
-        self.driver.handle(Message::Event(id, kind, payload), &self.rx);
+        self.driver
+            .handle(Message::Event(id, kind, payload), &self.rx);
         captured
     }
 
@@ -3441,7 +3438,14 @@ impl<M: TextEngine> State<M> {
                 match event {
                     JsEvent::Event(id, event, payload) => {
                         if matches!(event, EventKind::KeyDown | EventKind::KeyUp) {
-                            dispatch_key(script, &mut self.core, &mut self.key_path, id, event, &payload);
+                            dispatch_key(
+                                script,
+                                &mut self.core,
+                                &mut self.key_path,
+                                id,
+                                event,
+                                &payload,
+                            );
                         } else if !self.core.component_event(id, event, &payload)
                             && let Some(script) = script
                         {
@@ -3809,7 +3813,14 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             // ancestors within its window, for Rust and JS listeners
             // alike, from this one platform event.
             if matches!(event, EventKind::KeyDown | EventKind::KeyUp) {
-                dispatch_key(script, &mut state.core, &mut state.key_path, id, event, &payload);
+                dispatch_key(
+                    script,
+                    &mut state.core,
+                    &mut state.key_path,
+                    id,
+                    event,
+                    &payload,
+                );
                 return true;
             }
             // Events on a Rust component's parts are the component's.

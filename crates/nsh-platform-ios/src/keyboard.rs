@@ -77,8 +77,8 @@ use nsh_core::{
 use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject, sel};
 use objc2_foundation::{NSArray, NSSet, NSString};
 use objc2_ui_kit::{
-    UIKey, UIKeyCommand, UIKeyModifierFlags, UIFocusEnvironment, UIFocusSystem, UIFocusUpdateContext,
-    UIPress, UIView,
+    UIFocusEnvironment, UIFocusSystem, UIFocusUpdateContext, UIKey, UIKeyCommand,
+    UIKeyModifierFlags, UIPress, UIView,
 };
 
 use crate::{
@@ -140,12 +140,7 @@ impl Keyboard {
     /// The modifiers after `usage`'s transition, with a modifier key's own
     /// mask taken from the physical modifier keys held (so one Shift's
     /// release does not clear the other's). `flags` is UIKit's report.
-    fn effective_modifiers(
-        &self,
-        usage: u16,
-        flags: UIKeyModifierFlags,
-        down: bool,
-    ) -> Modifiers {
+    fn effective_modifiers(&self, usage: u16, flags: UIKeyModifierFlags, down: bool) -> Modifiers {
         let Some(mask) = modifier_mask(usage) else {
             self.observe(flags, None);
             return modifiers_of(flags);
@@ -507,11 +502,7 @@ fn listens(view: &NshView, target: &EventTarget) -> bool {
 /// Whether the focused view or an enabled logical ancestor captures
 /// `stroke` (the keymap's canonical keystroke) under its mounted
 /// `capture_keys` rule.
-fn captures(
-    view: &NshView,
-    target: &EventTarget,
-    stroke: Option<&Keystroke>,
-) -> bool {
+fn captures(view: &NshView, target: &EventTarget, stroke: Option<&Keystroke>) -> bool {
     target.captures_stroke(view.id(), stroke) || view.captures_key(stroke)
 }
 
@@ -703,8 +694,7 @@ pub(crate) fn visible(view: &UIView) -> bool {
 /// `didUpdateFocusInContext:` sees the same view. Nothing happens where the
 /// window has no focus system.
 pub(crate) fn request_focus(view: &UIView) {
-    let environment: &ProtocolObject<dyn UIFocusEnvironment> =
-        ProtocolObject::from_ref(view);
+    let environment: &ProtocolObject<dyn UIFocusEnvironment> = ProtocolObject::from_ref(view);
     if let Some(system) = UIFocusSystem::focusSystemForEnvironment(environment) {
         system.requestFocusUpdateToEnvironment(environment);
     }
@@ -730,9 +720,7 @@ pub(crate) fn adopt_focus(context: &UIFocusUpdateContext) {
     };
     let accepted = if let Some(view) = next.downcast_ref::<NshView>() {
         view.is_focus_stop() && view.becomeFirstResponder()
-    } else if next.downcast_ref::<Field>().is_some()
-        || next.downcast_ref::<Area>().is_some()
-    {
+    } else if next.downcast_ref::<Field>().is_some() || next.downcast_ref::<Area>().is_some() {
         next.becomeFirstResponder()
     } else {
         false

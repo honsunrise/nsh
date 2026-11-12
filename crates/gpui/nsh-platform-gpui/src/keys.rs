@@ -637,4 +637,3 @@ mod tests {
         nsh_core::keymap::Keystroke::parse_with(text, false).expect(text)
     }
 }
-

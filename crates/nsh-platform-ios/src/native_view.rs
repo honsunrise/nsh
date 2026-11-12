@@ -8,8 +8,7 @@ use std::cell::RefCell;
 use block2::RcBlock;
 use nsh_core::{
     Accessibility, AccessibilityCurrent, AccessibilityRole, Checked, EventKind, EventMask,
-    EventPayload, NodeId, PayloadValue, PointerEvents, ViewProps,
-    keymap::Keystroke,
+    EventPayload, NodeId, PayloadValue, PointerEvents, ViewProps, keymap::Keystroke,
 };
 use nsh_engine::EngineControl;
 use objc2::{
@@ -25,8 +24,8 @@ use objc2_ui_kit::{
     UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSearchField,
     UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText,
     UIAccessibilityTraitSummaryElement, UIAccessibilityTraitUpdatesFrequently,
-    UIAccessibilityTraits, UIEvent, UIFocusAnimationCoordinator, UIFocusUpdateContext, UIKeyCommand,
-    UIPress, UIPressesEvent, UIResponder, UITapGestureRecognizer, UIView,
+    UIAccessibilityTraits, UIEvent, UIFocusAnimationCoordinator, UIFocusUpdateContext,
+    UIKeyCommand, UIPress, UIPressesEvent, UIResponder, UITapGestureRecognizer, UIView,
 };
 
 use crate::target::EventTarget;

@@ -497,12 +497,7 @@ pub(crate) fn is_control(surface: &Surface, focus: &gtk::Widget) -> bool {
 /// the focus passed on them. A stop that takes no presses (a `focusable`
 /// chart) hears them through the shortcuts only. True when it was
 /// pressed.
-fn presses(
-    surface: &Surface,
-    view: &NshView,
-    key: Key,
-    held: nsh_core::keymap::Modifiers,
-) -> bool {
+fn presses(surface: &Surface, view: &NshView, key: Key, held: nsh_core::keymap::Modifiers) -> bool {
     if !core_input::presses_focused_control(key, held)
         || !view.state().events.contains(EventKind::Press)
     {
@@ -967,7 +962,10 @@ mod tests {
             let mut events = EventMask::default();
             events.set(EventKind::KeyDown, true);
             apply(&surface, &[MountItem::Events { id: 3, events }]);
-            assert!(crate::keyboard::listens(&surface, &plain), "a raw key listener");
+            assert!(
+                crate::keyboard::listens(&surface, &plain),
+                "a raw key listener"
+            );
             events.set(EventKind::KeyDown, false);
             apply(&surface, &[MountItem::Events { id: 3, events }]);
             assert!(!crate::keyboard::listens(&surface, &plain));
@@ -979,7 +977,10 @@ mod tests {
                 "an empty capture takes no key"
             );
             props(&surface, 3, |props| props.key_capture = KeyCapture::All);
-            assert!(crate::keyboard::listens(&surface, &plain), "a capture policy");
+            assert!(
+                crate::keyboard::listens(&surface, &plain),
+                "a capture policy"
+            );
         });
     }
 

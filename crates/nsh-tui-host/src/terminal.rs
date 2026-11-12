@@ -13,9 +13,7 @@ use nsh_platform_tui::{
     ColorDepth, CursorStyle, Input, Modifiers, MouseButton, MouseInput, MouseKind, RunEvent,
     TerminalCapabilities,
 };
-use ratatui_crossterm::crossterm::{
-    Command, cursor, event, execute, style::Print, terminal,
-};
+use ratatui_crossterm::crossterm::{Command, cursor, event, execute, style::Print, terminal};
 
 const ENABLE_ALTERNATE_SCROLL: &str = "\x1b[?1007h";
 const DISABLE_ALTERNATE_SCROLL: &str = "\x1b[?1007l";
@@ -362,10 +360,7 @@ impl Session {
             event::EnableFocusChange
         );
         if keyboard_protocol(&replies, |name| std::env::var(name).ok()) {
-            execute!(
-                Output,
-                event::PushKeyboardEnhancementFlags(KEYBOARD_FLAGS)
-            )?;
+            execute!(Output, event::PushKeyboardEnhancementFlags(KEYBOARD_FLAGS))?;
             session.modes.keyboard.store(true, Ordering::Release);
             session.keyboard = true;
             session.capabilities.command_key = true;
@@ -838,9 +833,7 @@ mod tests {
         let mut key = event::KeyEvent::new(event::KeyCode::Left, event::KeyModifiers::NONE);
         key.kind = event::KeyEventKind::Release;
         let RunEvent::Input(Input::Key {
-            key: name,
-            release,
-            ..
+            key: name, release, ..
         }) = convert(event::Event::Key(key))
         else {
             panic!("key input");

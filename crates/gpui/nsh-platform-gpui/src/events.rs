@@ -424,8 +424,8 @@ pub(crate) fn install<V: gpui::EntityInputHandler>(
         // canonical stroke, and reaches the focused view; a key with a code
         // keeps the code's meaning. Only the keymap or a listener needs it.
         let vk = crate::keys::vk_of(&e.keystroke.key);
-        let wants_raw = crate::input::hears_keys(&s)
-            || (vk.is_none() && crate::keymap::mounted(&s));
+        let wants_raw =
+            crate::input::hears_keys(&s) || (vk.is_none() && crate::keymap::mounted(&s));
         let raw = wants_raw.then(|| crate::keys::RawKey::down(&e.keystroke, e.is_held));
         let event = KeyEvent {
             vk: vk.unwrap_or(0),
@@ -457,8 +457,8 @@ pub(crate) fn install<V: gpui::EntityInputHandler>(
             return;
         }
         let vk = crate::keys::vk_of(&e.keystroke.key);
-        let wants_raw = crate::input::hears_keys(&s)
-            || (vk.is_none() && crate::keymap::mounted(&s));
+        let wants_raw =
+            crate::input::hears_keys(&s) || (vk.is_none() && crate::keymap::mounted(&s));
         let raw = wants_raw.then(|| crate::keys::RawKey::up(&e.keystroke));
         let event = KeyEvent {
             vk: vk.unwrap_or(0),

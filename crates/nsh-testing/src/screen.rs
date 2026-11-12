@@ -14,8 +14,8 @@ use std::{
 
 use nsh_core::{
     AccessibilityRole, AccessibilityState, Bounds, Command, Dialog, EventKind, EventMask,
-    GestureValues, InputConfig, KeyCapture, MountBatch, MountItem, NodeId, PanActivation,
-    Point, PointerEvents, Points, Size, ViewKind, element::PropEnum, keymap::Keystroke,
+    GestureValues, InputConfig, KeyCapture, MountBatch, MountItem, NodeId, PanActivation, Point,
+    PointerEvents, Points, Size, ViewKind, element::PropEnum, keymap::Keystroke,
 };
 
 use crate::selector::{Matcher, Selector, TextMatch};
@@ -2458,8 +2458,7 @@ impl Screen {
             let Some(view) = self.nodes.get(&id) else {
                 return false;
             };
-            if !self.disabled_from(id, Some(window))
-                && view.key_capture.captures_key(Some(stroke))
+            if !self.disabled_from(id, Some(window)) && view.key_capture.captures_key(Some(stroke))
             {
                 return true;
             }
