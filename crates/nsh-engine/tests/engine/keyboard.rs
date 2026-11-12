@@ -150,6 +150,6 @@ fn one_key_event_bubbles_once_with_its_capture() {
     control.dispatch_event(inner.0, EventKind::KeyUp, EventPayload::Key(up));
     until_log(
         &rx,
-        "log inner down k|mid down k|outer down k true true string|inner up k|outer up k",
+        "log inner down k|mid down k|outer down k true true string|inner up k|outer up k true",
     );
 }
