@@ -187,6 +187,39 @@ impl RawKey {
         RawKey::new(keystroke, false, false)
     }
 
+    /// The key a test step asked for (`nsh/test`'s `keyboard.press`): the
+    /// step's explicit keystroke is the source, so the event and the
+    /// stroke a capture rule matches are both that keystroke — the
+    /// character it types on the US layout (Shift's), the web's name for
+    /// a named key — with no hardware metadata (`physical` stays `None`).
+    /// `down` is the transition the step generates; it marks no repeat.
+    pub(crate) fn requested(keystroke: &Keystroke, down: bool) -> Self {
+        let modifiers = keystroke.modifiers;
+        let (key, text) = match keystroke.key {
+            ShortcutKey::Char(c) => {
+                let typed = if modifiers.shift {
+                    nsh_core::keymap::shifted(c)
+                } else {
+                    c
+                };
+                let types = down && !(modifiers.ctrl || modifiers.alt || modifiers.cmd);
+                (
+                    SharedString::from(typed.to_string()),
+                    types.then(|| SharedString::from(typed.to_string())),
+                )
+            }
+            named => (named_key(named), None),
+        };
+        RawKey {
+            down,
+            key,
+            text,
+            modifiers,
+            repeat: false,
+            stroke: Some(*keystroke),
+        }
+    }
+
     fn new(keystroke: &gpui::Keystroke, down: bool, repeat: bool) -> Self {
         let modifiers = key_modifiers(&keystroke.modifiers);
         let stroke = source_stroke(&keystroke.key, modifiers);
@@ -287,6 +320,29 @@ fn named(key: &str) -> Option<SharedString> {
         }
     };
     Some(SharedString::new_static(name))
+}
+
+/// The web's name for a named key a test step asked for.
+fn named_key(key: ShortcutKey) -> SharedString {
+    let name = match key {
+        ShortcutKey::Enter => "Enter",
+        ShortcutKey::Escape => "Escape",
+        ShortcutKey::Tab => "Tab",
+        ShortcutKey::Backspace => "Backspace",
+        ShortcutKey::Delete => "Delete",
+        ShortcutKey::Insert => "Insert",
+        ShortcutKey::Home => "Home",
+        ShortcutKey::End => "End",
+        ShortcutKey::PageUp => "PageUp",
+        ShortcutKey::PageDown => "PageDown",
+        ShortcutKey::Up => "ArrowUp",
+        ShortcutKey::Down => "ArrowDown",
+        ShortcutKey::Left => "ArrowLeft",
+        ShortcutKey::Right => "ArrowRight",
+        ShortcutKey::F(n) => return SharedString::from(format!("F{n}")),
+        ShortcutKey::Char(c) => return SharedString::from(c.to_string()),
+    };
+    SharedString::new_static(name)
 }
 
 /// The canonical shortcut keystroke of the key GPUI reports as `key` with
@@ -497,6 +553,35 @@ mod tests {
         assert!(dead.stroke().is_none());
         assert!(KeyCapture::All.captures_key(dead.stroke()));
         assert!(!KeyCapture::None.captures_key(dead.stroke()));
+    }
+
+    #[test]
+    fn a_test_steps_key_is_the_keystroke_it_asked_for() {
+        // A step naming `shift+/`: its event is the `?` the US layout
+        // types, and the stroke a capture rule or binding matches is the
+        // step's own keystroke.
+        let shift_slash = stroke_of("shift+/");
+        let down = RawKey::requested(&shift_slash, true);
+        let event = down.event(false);
+        assert_eq!(event.key, "?");
+        assert_eq!(event.text.as_deref(), Some("?"));
+        assert!(event.modifiers.shift);
+        assert!(event.physical.is_none());
+        assert!(!event.repeat);
+        assert_eq!(down.stroke(), Some(&shift_slash));
+        assert!(KeyCapture::keys([shift_slash]).captures_key(down.stroke()));
+        // A release types nothing, with the same stroke.
+        let up = RawKey::requested(&shift_slash, false);
+        assert_eq!(up.event(false).text, None);
+        assert_eq!(up.stroke(), Some(&shift_slash));
+        // A shortcut's key types nothing.
+        let event = RawKey::requested(&stroke_of("ctrl+a"), true).event(false);
+        assert_eq!(event.key, "a");
+        assert_eq!(event.text, None);
+        // A named key takes the web's spelling.
+        let event = RawKey::requested(&stroke_of("enter"), true).event(false);
+        assert_eq!(event.key, "Enter");
+        assert_eq!(event.text, None);
     }
 
     #[test]
