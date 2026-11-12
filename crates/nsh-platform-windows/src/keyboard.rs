@@ -21,18 +21,23 @@
 //! defaults of [`crate::input::key`] (the application menu, a focused
 //! field's editing, navigation, scrolling, Tab's traversal). A captured
 //! key is still reported, with `captured` set, and runs none of those
-//! defaults. The `WM_CHAR` messages `TranslateMessage` queued for a
-//! captured key are removed from the window's queue
-//! ([`crate::keymap::drop_chars`]), so no text is typed; nothing is
-//! remembered afterwards, so the next key's characters are untouched.
+//! defaults. A captured key is never translated into characters:
+//! [`suppress_translation`] runs from the thread's `WH_GETMESSAGE` hook
+//! (and the standalone loop) before `TranslateMessage`, and turns the key
+//! down into a private message the window procedure handles as the key
+//! down it was. Nothing of the message queue is inspected, moved or
+//! restamped, so a character queued around the key keeps its place and
+//! its delivery.
 //!
 //! Focus is per native window (the main window's root, or the root of a
 //! window of the app's own): a window in the background keeps its view, and
-//! the keys of the window in front only reach its own. A view that is
-//! removed, concealed or disabled loses the focus without a synthetic key
-//! release; releases are reported when the source sends them, on whatever
-//! view has the focus then, and repeats are what the message's
-//! previous-key-state bit says.
+//! the keys of the window in front only reach its own. A modal presented
+//! over a window saves the custom view with the focus, as it saves a
+//! text field, and gives it back when it closes if that view is still a
+//! shown, enabled stop. A view that is removed, concealed or disabled
+//! loses the focus without a synthetic key release; releases are reported
+//! when the source sends them, on whatever view has the focus then, and
+//! repeats are what the message's previous-key-state bit says.
 
 use std::cell::RefCell;
 
@@ -42,12 +47,20 @@ use nsh_core::{
     keymap::{Key, Keystroke},
 };
 use rustc_hash::FxHashMap;
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, GetKeyState, GetKeyboardLayout, GetKeyboardState, HKL, MAPVK_VK_TO_CHAR,
-    MapVirtualKeyExW, SetFocus, ToUnicodeEx, VK_NUMLOCK,
+use windows::Win32::UI::{
+    Input::KeyboardAndMouse::{
+        GetFocus, GetKeyState, GetKeyboardLayout, GetKeyboardState, HKL, MAPVK_VK_TO_CHAR,
+        MapVirtualKeyExW, SetFocus, SetKeyboardState, ToUnicodeEx, VK_NUMLOCK,
+    },
+    WindowsAndMessaging::{MSG, WM_KEYDOWN, WM_SYSKEYDOWN},
 };
 
 use crate::{app_window::window_of, input::KeyEvent, surface::Surface, view::NshView};
+
+/// `ToUnicodeEx`'s "keyboard state is not changed" flag (Windows 10
+/// 1607+): translating a key for an event must not store the dead key,
+/// ligature or Alt+numpad state it reads.
+const NO_STATE_CHANGE: u32 = 0x4;
 
 /// A surface's keyboard focus: the view with it in each of its windows.
 #[derive(Default)]
@@ -456,16 +469,40 @@ fn key_name(event: &KeyEvent) -> SharedString {
     }
 }
 
-/// The character `event`'s key types on the current layout with Shift
-/// and Caps Lock (DOM's `key`: `"A"` for Shift+A), Control, Alt and the
-/// Windows key ignored (a shortcut reports the character it is on, not a
-/// control character). A dead key has none (it composes with the next
-/// key), and neither has a key that types nothing.
+/// The character `event`'s key types on the current layout, as DOM's
+/// `key` reports it: the source's own translation with every modifier and
+/// lock held (AltGr's `@`, Shift's `A`). A Control/Alt/Windows combination
+/// that only makes a control character (`Ctrl+A`'s 0x01) is no key name:
+/// then the key without them is used (`a`), with Shift and Caps Lock kept
+/// (a shortcut reports the character it is on). A dead key has none (it
+/// composes with the next key), and neither has a key that types nothing.
 fn logical_char(event: &KeyEvent) -> Option<char> {
     if dead_key(event.vk) {
         return None;
     }
-    let state = logical_state();
+    // The source's own translation first: AltGr's `@`, Shift's `?` and
+    // Caps Lock's `A` are the character the key is, even though the
+    // modifiers held are Control and Alt. A Control/Alt combination that
+    // makes a control character (`Ctrl+A`'s 0x01) is not a key name: then
+    // the key without them (`a`), which is what a shortcut is on.
+    if let Some(c) = translated(event, &actual_state()) {
+        return Some(c);
+    }
+    translated(event, &logical_state()).or_else(|| {
+        // A virtual key with no character (an arrow, a function key).
+        mapped_char(event.vk).filter(|c| !c.is_control())
+    })
+}
+
+/// `event`'s key translated with `state` (`ToUnicodeEx`): the first
+/// character, when the source writes one and it is printable. A dead key
+/// is never translated (`dead_key`) and written nothing.
+///
+/// Every translation passes [`NO_STATE_CHANGE`], so a dead key in a layer
+/// the virtual key's base character does not show (an AltGr dead key) is
+/// read without being stored: the layout's pending dead key, ligatures and
+/// Alt+numpad entry are left as `TranslateMessage` left them.
+fn translated(event: &KeyEvent, state: &[u8; 256]) -> Option<char> {
     let mut buffer = [0u16; 4];
     // SAFETY: plain calls; `buffer` is a local out value and `state` a
     // full keyboard-state array.
@@ -473,24 +510,26 @@ fn logical_char(event: &KeyEvent) -> Option<char> {
         ToUnicodeEx(
             event.vk as u32,
             event.scan as u32,
-            &state,
+            state,
             &mut buffer,
-            0,
+            NO_STATE_CHANGE,
             Some(layout()),
         )
     };
-    if written > 0 {
-        let text = String::from_utf16_lossy(&buffer[..written as usize]);
-        // A control character is no key name (`Cancel`, `Tab` and the
-        // like are named above).
-        return text.chars().next().filter(|c| !c.is_control());
-    }
-    if written < 0 {
-        // A dead key the mapping below would have told us about.
+    if written <= 0 {
         return None;
     }
-    // A virtual key with no character (an arrow, a function key).
-    mapped_char(event.vk).filter(|c| !c.is_control())
+    let text = String::from_utf16_lossy(&buffer[..written as usize]);
+    text.chars().next().filter(|c| !c.is_control())
+}
+
+/// The keyboard state as the message found it: what the character is with
+/// every modifier and lock the user holds (AltGr's `@`, Shift's `A`).
+fn actual_state() -> [u8; 256] {
+    let mut state = [0u8; 256];
+    // SAFETY: a full keyboard-state array as an out value.
+    let _ = unsafe { GetKeyboardState(&mut state) };
+    state
 }
 
 /// Whether Num Lock is on (its toggle, as of the key being handled).
@@ -519,9 +558,10 @@ fn keypad_navigation(vk: u16) -> Option<&'static str> {
 }
 
 /// The keyboard state with Control, Alt and the Windows key up: what a
-/// shortcut's key is, without the control character they make. Shift,
-/// Caps Lock, Num Lock and the layout's own toggles stay, so the key keeps
-/// its actual case and a keypad key keeps its digit with Num Lock on.
+/// shortcut's key is, without the control character they make. Shift and
+/// Caps Lock stay, so the key keeps its actual case; `ToUnicodeEx` ignores
+/// Num Lock and Scroll Lock (a keypad key with Num Lock off is named as
+/// its navigation key by [`key_name`] before this).
 fn logical_state() -> [u8; 256] {
     let mut state = [0u8; 256];
     // SAFETY: a full keyboard-state array as an out value.
@@ -567,14 +607,14 @@ fn layout() -> HKL {
 /// The text `event`'s key types with the modifiers held (a preview, not
 /// committed input-method text), and the UTF-16 units `TranslateMessage`
 /// queued for it: the characters a capture removes.
-fn typed_text(event: &KeyEvent) -> (Option<SharedString>, usize) {
+fn typed_text(event: &KeyEvent) -> Option<SharedString> {
     if dead_key(event.vk) {
-        return (None, 0);
+        return None;
     }
     let mut state = [0u8; 256];
     // SAFETY: a full keyboard-state array as an out value.
     if unsafe { GetKeyboardState(&mut state) }.is_err() {
-        return (None, 0);
+        return None;
     }
     let mut buffer = [0u16; 8];
     // SAFETY: plain calls; `buffer` is a local out value.
@@ -584,27 +624,24 @@ fn typed_text(event: &KeyEvent) -> (Option<SharedString>, usize) {
             event.scan as u32,
             &state,
             &mut buffer,
-            0,
+            NO_STATE_CHANGE,
             Some(layout()),
         )
     };
     if written <= 0 {
-        return (None, 0);
+        return None;
     }
-    let count = written as usize;
-    let text = String::from_utf16_lossy(&buffer[..count]);
+    let text = String::from_utf16_lossy(&buffer[..written as usize]);
     let modifiers = event.modifiers;
-    let preview = if !modifiers.ctrl
-        && !modifiers.alt
-        && !modifiers.meta
-        && !text.is_empty()
-        && !text.chars().any(char::is_control)
+    if modifiers.ctrl
+        || modifiers.alt
+        || modifiers.meta
+        || text.is_empty()
+        || text.chars().any(char::is_control)
     {
-        Some(SharedString::from(text))
-    } else {
-        None
-    };
-    (preview, count)
+        return None;
+    }
+    Some(SharedString::from(text))
 }
 
 /// The message's physical key: its scan code, with `0x100` set for an
@@ -631,20 +668,15 @@ fn capture_keystroke(event: &KeyEvent) -> Option<Keystroke> {
     clippy::field_reassign_with_default,
     reason = "nsh_core::KeyEvent is #[non_exhaustive]: its default, then its fields"
 )]
-fn core_event(event: &KeyEvent, down: bool, captured: bool) -> (nsh_core::KeyEvent, usize) {
-    let (text, units) = if down {
-        typed_text(event)
-    } else {
-        (None, 0)
-    };
+fn core_event(event: &KeyEvent, down: bool, captured: bool) -> nsh_core::KeyEvent {
     let mut key = nsh_core::KeyEvent::default();
     key.key = key_name(event);
-    key.text = text;
+    key.text = if down { typed_text(event) } else { None };
     key.physical = physical(event);
     key.modifiers = event.modifiers.core();
     key.repeat = down && event.repeat;
     key.captured = captured;
-    (key, units)
+    key
 }
 
 /// A key down on the focused custom view: reports it and says whether a
@@ -659,15 +691,13 @@ pub(crate) fn press(surface: &std::rc::Rc<Surface>, event: &KeyEvent) -> bool {
     }
     let stroke = capture_keystroke(event);
     let captured = captures(surface, &view, stroke.as_ref());
-    let (key, units) = core_event(event, true, captured);
+    let key = core_event(event, true, captured);
     surface.event(view.id(), EventKind::KeyDown, EventPayload::Key(key));
-    if captured {
-        // No text follows the captured key: the characters it would have
-        // typed go, and only those (a key that types none removes none).
-        crate::keymap::drop_chars(surface, units);
-        return true;
-    }
-    false
+    // A captured key was never translated into characters
+    // (`suppress_translation`), so no text follows it; no queue is
+    // touched here, and a character the queue already held stays where it
+    // is.
+    captured
 }
 
 /// A key up: the focused custom view hears it (whichever view has the
@@ -687,8 +717,64 @@ pub(crate) fn release(surface: &std::rc::Rc<Surface>, event: &KeyEvent) {
     }
     let stroke = capture_keystroke(event);
     let captured = captures(surface, &view, stroke.as_ref());
-    let (key, _) = core_event(event, false, captured);
+    let key = core_event(event, false, captured);
     surface.event(view.id(), EventKind::KeyUp, EventPayload::Key(key));
+}
+
+/// A key down that a mounted capture consumes must not be translated into
+/// characters: this changes such a message to
+/// [`crate::window::WM_NSH_KEYDOWN`] / [`crate::window::WM_NSH_SYSKEYDOWN`],
+/// which `TranslateMessage` ignores, and the window procedure handles as
+/// the key down it was.
+///
+/// The thread's `WH_GETMESSAGE` hook runs this before the caller's
+/// `TranslateMessage` (the standalone loop calls it too), so a captured key
+/// never queues a `WM_CHAR` / `WM_SYSCHAR`: nothing of the queue is
+/// inspected, moved or restamped, and a character queued around the key
+/// keeps its place. A key no mounted capture takes is left alone and
+/// translates as usual.
+pub(crate) fn suppress_translation(msg: &mut MSG) -> bool {
+    let sys = msg.message == WM_SYSKEYDOWN;
+    if !sys && msg.message != WM_KEYDOWN {
+        return false;
+    }
+    let Some(surface) = crate::window::surface_of(msg.hwnd) else {
+        return false;
+    };
+    let bits = msg.lParam.0 as usize;
+    let event = KeyEvent {
+        vk: msg.wParam.0 as u16,
+        down: true,
+        repeat: (bits >> 30) & 1 == 1,
+        modifiers: crate::window::modifiers(),
+        scan: ((bits >> 16) & 0xFF) as u16,
+        extended: (bits >> 24) & 1 == 1,
+        sys,
+    };
+    let window = crate::window::app_window_root(msg.hwnd).unwrap_or(nsh_core::ROOT_ID);
+    if !captured_now(&surface, window, &event) {
+        return false;
+    }
+    msg.message = if sys {
+        crate::window::WM_NSH_SYSKEYDOWN
+    } else {
+        crate::window::WM_NSH_KEYDOWN
+    };
+    true
+}
+
+/// Whether the key down on window `window`'s focused custom view is
+/// consumed by a mounted capture rule: the decision [`press`] makes when
+/// the message is dispatched.
+fn captured_now(surface: &Surface, window: NodeId, event: &KeyEvent) -> bool {
+    let Some(view) = focused_in(surface, window) else {
+        return false;
+    };
+    if !listens(surface, &view) {
+        return false;
+    }
+    let stroke = capture_keystroke(event);
+    captures(surface, &view, stroke.as_ref())
 }
 
 #[cfg(test)]
@@ -749,6 +835,7 @@ mod tests {
             modifiers: Modifiers::default(),
             scan: 0,
             extended: false,
+            sys: false,
         }
     }
 
@@ -895,19 +982,152 @@ mod tests {
     fn the_event_reports_the_transition() {
         let mut down = key(0x41);
         down.repeat = true;
-        let (event, _) = core_event(&down, true, true);
+        let event = core_event(&down, true, true);
         assert!(event.captured);
         assert!(event.repeat, "the message's previous-key-state bit");
-        let (event, units) = core_event(&down, false, false);
+        let event = core_event(&down, false, false);
         assert!(!event.captured);
         assert!(!event.repeat, "a release is never an auto-repeat");
         assert!(event.text.is_none(), "a release types no text");
-        assert_eq!(units, 0);
         // Control makes a shortcut, not text.
         let mut ctrl = key(0x41);
         ctrl.modifiers.ctrl = true;
-        let (event, _) = core_event(&ctrl, true, false);
+        let event = core_event(&ctrl, true, false);
         assert!(event.text.is_none());
+    }
+
+    /// A modal root `id`, presented without animation.
+    fn modal(surface: &std::rc::Rc<Surface>, id: NodeId) -> NshView {
+        use nsh_core::{ModalAnimation, ModalConfig};
+        let view = NshView::new(id, ViewKind::Modal);
+        view.state_mut().frame = rect(0.0, 0.0, 400.0, 400.0);
+        crate::navigation::modal_config(
+            surface,
+            &view,
+            &ModalConfig {
+                animation: ModalAnimation::None,
+                ..Default::default()
+            },
+        );
+        view
+    }
+
+    #[test]
+    fn a_modal_restores_the_custom_focus_it_took() {
+        let surface = surface();
+        let view = focusable(&surface, 2);
+        assert!(focus_control(&surface, &view));
+        let dialog = modal(&surface, 4);
+        crate::navigation::present(&surface, &dialog);
+        assert!(
+            focused_in(&surface, ROOT_ID).is_none(),
+            "the modal takes the keyboard from the view behind it"
+        );
+        crate::navigation::dismiss(&surface, &dialog);
+        assert_eq!(
+            focused_in(&surface, ROOT_ID).as_ref(),
+            Some(&view),
+            "closing the modal gives the focus back, as a field's"
+        );
+        // A view that is gone, disabled or no longer a stop restores
+        // nothing.
+        let dialog = modal(&surface, 6);
+        crate::navigation::present(&surface, &dialog);
+        let mut props: ViewProps = view.state().props.clone();
+        props.accessibility.state.disabled = true;
+        apply(&surface, &[MountItem::ViewProps { id: 2, props }]);
+        crate::navigation::dismiss(&surface, &dialog);
+        assert!(focused_in(&surface, ROOT_ID).is_none());
+        let mut props: ViewProps = view.state().props.clone();
+        props.accessibility.state.disabled = false;
+        apply(&surface, &[MountItem::ViewProps { id: 2, props }]);
+        assert!(focus_control(&surface, &view));
+        let dialog = modal(&surface, 8);
+        crate::navigation::present(&surface, &dialog);
+        apply(&surface, &[MountItem::Delete { id: 2 }]);
+        crate::navigation::dismiss(&surface, &dialog);
+        assert!(focused_in(&surface, ROOT_ID).is_none());
+    }
+
+    #[test]
+    fn keypad_keys_are_the_navigation_keys_with_num_lock_off() {
+        for (vk, name) in [
+            (0x60, "Insert"),
+            (0x61, "End"),
+            (0x62, "ArrowDown"),
+            (0x63, "PageDown"),
+            (0x64, "ArrowLeft"),
+            (0x65, "Clear"),
+            (0x66, "ArrowRight"),
+            (0x67, "Home"),
+            (0x68, "ArrowUp"),
+            (0x69, "PageUp"),
+            (0x6E, "Delete"),
+        ] {
+            assert_eq!(keypad_navigation(vk), Some(name), "{vk:#x}");
+        }
+        assert!(keypad_navigation(0x41).is_none());
+    }
+
+    /// AltGr (Windows reports it as Control+Alt) keeps the character the
+    /// source translates, when it has one; a control character is not the
+    /// key's name, so the key without Control/Alt is used.
+    #[test]
+    fn the_logical_key_prefers_the_sources_actual_character() {
+        let mut event = key(0x41);
+        event.scan = 0x1E;
+        let mut state = [0u8; 256];
+        // Control and Alt down, as AltGr is reported.
+        state[0x11] = 0x80;
+        state[0x12] = 0x80;
+        // SAFETY: a full keyboard-state array for this thread.
+        if unsafe { SetKeyboardState(&state) }.is_err() {
+            // A thread that cannot set its key state has no AltGr state to
+            // exercise here.
+            return;
+        }
+        let actual = translated(&event, &actual_state());
+        let base = translated(&event, &logical_state());
+        let expected = actual
+            .or(base)
+            .or_else(|| mapped_char(event.vk).filter(|c| !c.is_control()));
+        let reported = core_event(&event, true, false);
+        match expected {
+            Some(character) => {
+                assert_eq!(reported.key.as_str(), character.to_string().as_str())
+            }
+            None => assert_eq!(reported.key.as_str(), "Unidentified"),
+        }
+        if let Some(character) = actual {
+            assert_eq!(
+                reported.key.as_str(),
+                character.to_string().as_str(),
+                "the source's actual character wins (AltGr)"
+            );
+        }
+        let mut clear = [0u8; 256];
+        // SAFETY: as above.
+        let _ = unsafe { SetKeyboardState(&clear) };
+    }
+
+    /// `ToUnicodeEx` runs with its no-state-change flag: a dead key read
+    /// for an event is not stored, so asking twice is still the dead key
+    /// (a state-changing call would compose it with itself). The setup
+    /// looks for a dead key on this layout; one without any checks nothing.
+    /// An AltGr-layer-only dead key is covered by the same flag, though
+    /// `MapVirtualKeyEx` cannot name it.
+    #[test]
+    fn translations_do_not_store_a_dead_key() {
+        let Some(vk) = (0x20u16..=0xFF).find(|vk| dead_key(*vk)) else {
+            return;
+        };
+        let event = key(vk);
+        let state = actual_state();
+        assert!(translated(&event, &state).is_none(), "{vk:#x} is dead");
+        assert!(
+            translated(&event, &state).is_none(),
+            "{vk:#x} composed with itself: the dead key was stored"
+        );
     }
 
     #[test]
