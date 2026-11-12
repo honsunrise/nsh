@@ -384,7 +384,7 @@ pub(crate) fn press(
         }
         return false;
     };
-    if !crate::keyboard::listens(&view) || crate::keyboard::native_owns(&view) {
+    if !crate::keyboard::listens(surface, &view) || crate::keyboard::native_owns(&view) {
         // A view with no raw keys (or a native input/content that owns its
         // keys) keeps the original path: the app's bindings (GTK's
         // controller) first, then the menu's shortcut, then the defaults.
@@ -423,7 +423,7 @@ pub(crate) fn press(
         crate::keyboard::KeyPhase::Down { repeat },
         group,
     );
-    let captured = crate::keyboard::captures(&view, &key_event, keycode, modifiers, group);
+    let captured = crate::keyboard::captures(surface, &view, &key_event, keycode, modifiers, group);
     key_event.captured = captured;
     crate::keyboard::notify(surface, &view, EventKind::KeyDown, key_event);
     if captured {
@@ -628,6 +628,7 @@ mod tests {
             0,
         );
         crate::keyboard::captures(
+            surface,
             view,
             &event,
             keycode,
@@ -750,7 +751,7 @@ mod tests {
             events.set(EventKind::KeyDown, true);
             apply(&surface, &[MountItem::Events { id: 2, events }]);
             assert!(
-                crate::keyboard::listens(&child),
+                crate::keyboard::listens(&surface, &child),
                 "an ancestor's raw listener reaches the child"
             );
             assert!(captured(&surface, &child, gdk::Key::Escape));
@@ -760,6 +761,66 @@ mod tests {
                 props.accessibility.state.disabled = true;
             });
             assert!(!captured(&surface, &child, gdk::Key::Escape));
+        });
+    }
+
+    /// Two portaled children share a native overlay host: one's logical
+    /// parent listens and captures, the other's does not. Keyboard ancestry
+    /// follows `key_parent`, not the native Insert parent.
+    #[test]
+    fn a_portals_logical_ancestor_routes_interest_and_capture() {
+        run(|| {
+            let surface = surface();
+            let mut items = Vec::new();
+            for id in [2, 5, 7] {
+                items.push(MountItem::Create {
+                    id,
+                    kind: ViewKind::View,
+                });
+                items.push(MountItem::Insert {
+                    parent: ROOT_ID,
+                    child: id,
+                    before: None,
+                });
+            }
+            for id in [3, 4] {
+                items.push(MountItem::Create {
+                    id,
+                    kind: ViewKind::View,
+                });
+                items.push(MountItem::Insert {
+                    parent: 5,
+                    child: id,
+                    before: None,
+                });
+            }
+            apply(&surface, &items);
+            // The logical ancestor hears raw keys and captures them; the
+            // unrelated logical parent (7) does neither.
+            let mut events = EventMask::default();
+            events.set(EventKind::KeyDown, true);
+            apply(&surface, &[MountItem::Events { id: 2, events }]);
+            props(&surface, 2, |props| props.key_capture = KeyCapture::All);
+            props(&surface, 3, |props| {
+                props.key_parent = Some(2);
+                props.focusable = Some(true);
+            });
+            props(&surface, 4, |props| {
+                props.key_parent = Some(7);
+                props.focusable = Some(true);
+            });
+            let child = view(&surface, 3);
+            let sibling = view(&surface, 4);
+            assert!(
+                crate::keyboard::listens(&surface, &child),
+                "the portal follows its logical ancestor"
+            );
+            assert!(captured(&surface, &child, gdk::Key::Escape));
+            assert!(
+                !crate::keyboard::listens(&surface, &sibling),
+                "an unrelated portal is not under the listener"
+            );
+            assert!(!captured(&surface, &sibling, gdk::Key::Escape));
         });
     }
 
@@ -900,23 +961,23 @@ mod tests {
             let surface = surface();
             views(&surface);
             let plain = view(&surface, 3);
-            assert!(!crate::keyboard::listens(&plain));
+            assert!(!crate::keyboard::listens(&surface, &plain));
             let mut events = EventMask::default();
             events.set(EventKind::KeyDown, true);
             apply(&surface, &[MountItem::Events { id: 3, events }]);
-            assert!(crate::keyboard::listens(&plain), "a raw key listener");
+            assert!(crate::keyboard::listens(&surface, &plain), "a raw key listener");
             events.set(EventKind::KeyDown, false);
             apply(&surface, &[MountItem::Events { id: 3, events }]);
-            assert!(!crate::keyboard::listens(&plain));
+            assert!(!crate::keyboard::listens(&surface, &plain));
             props(&surface, 3, |props| {
                 props.key_capture = KeyCapture::keys([]);
             });
             assert!(
-                !crate::keyboard::listens(&plain),
+                !crate::keyboard::listens(&surface, &plain),
                 "an empty capture takes no key"
             );
             props(&surface, 3, |props| props.key_capture = KeyCapture::All);
-            assert!(crate::keyboard::listens(&plain), "a capture policy");
+            assert!(crate::keyboard::listens(&surface, &plain), "a capture policy");
         });
     }
 

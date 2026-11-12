@@ -16,10 +16,12 @@
 //! focused when the source reports it, even when its press went to another
 //! view (a focus move, a popup grab), as a browser reports it on the
 //! focused element. No platform retains an original down target, and a
-//! blur emits no synthetic release. `KeyEvent::physical` keeps the
-//! hardware keycode GDK reports; the logical key is GDK's actual keyval,
-//! so Shift's case and a non-US character are reported as the source gives
-//! them.
+//! blur emits no synthetic release. Keyboard ancestry follows
+//! `ViewProps::key_parent` for a portaled view whose native `Insert` parent
+//! differs from its logical parent; focus, hit testing and layout keep the
+//! native parent. `KeyEvent::physical` keeps the hardware keycode GDK
+//! reports; the logical key is GDK's actual keyval, so Shift's case and a
+//! non-US character are reported as the source gives them.
 //!
 //! A captured key still notifies the focused view and its ancestors (the
 //! engine bubbles it), with `KeyEvent::captured` set; it runs no default
@@ -88,11 +90,30 @@ pub(crate) fn held(surface: &Surface, window: &gtk::Window, keycode: u32) -> boo
     false
 }
 
-/// Whether `view` or an ancestor hears a raw key event, or captures keys:
-/// only then does a key need a [`KeyEvent`], its capture rules and the
-/// per-key state. A view that hears none takes [`crate::key_focus`]'s
-/// original path, with nothing built.
-pub(crate) fn listens(view: &NshView) -> bool {
+/// The keyboard ancestor of a view: its logical parent when `key_parent`
+/// overrides the native one (a portaled `Overlay` is inserted at a native
+/// host, not under its logical parent), else its mounted native parent.
+/// A logical parent outside the view's window is not an ancestor, so the
+/// window boundary stays the one the app sees.
+fn keyboard_parent(surface: &Surface, view: &NshView) -> Option<NshView> {
+    let Some(id) = ({ view.state().props.key_parent }) else {
+        return view.parent_view();
+    };
+    let parent = surface
+        .mounter
+        .try_borrow()
+        .ok()?
+        .views
+        .get(&id)
+        .cloned()?;
+    (parent.id() != view.id() && parent.root() == view.root()).then_some(parent)
+}
+
+/// Whether `view` or a logical ancestor hears a raw key event, or captures
+/// keys: only then does a key need a [`KeyEvent`], its capture rules and
+/// the per-key state. A view that hears none takes
+/// [`crate::key_focus`]'s original path, with nothing built.
+pub(crate) fn listens(surface: &Surface, view: &NshView) -> bool {
     let mut current = Some(view.clone());
     while let Some(view) = current {
         {
@@ -103,7 +124,7 @@ pub(crate) fn listens(view: &NshView) -> bool {
                 return true;
             }
         }
-        current = view.parent_view();
+        current = keyboard_parent(surface, &view);
     }
     false
 }
@@ -129,6 +150,7 @@ pub(crate) fn native_owns(view: &NshView) -> bool {
 /// Shift on the event's layout group), the vocabulary `nsh/keymap` already
 /// parses. The raw logical event key is never parsed as a shortcut.
 pub(crate) fn captures(
+    surface: &Surface,
     view: &NshView,
     event: &KeyEvent,
     keycode: u32,
@@ -148,7 +170,7 @@ pub(crate) fn captures(
             return true;
         }
         drop(state);
-        current = view.parent_view();
+        current = keyboard_parent(surface, &view);
     }
     false
 }
@@ -266,7 +288,7 @@ pub(crate) fn released(
     let Some(view) = view else {
         return;
     };
-    if !listens(view) || native_owns(view) {
+    if !listens(surface, view) || native_owns(view) {
         return;
     }
     // The view focused now hears the release, even when the press went to
@@ -280,7 +302,7 @@ pub(crate) fn released(
         KeyPhase::Up,
         group,
     );
-    event.captured = captures(view, &event, keycode, state, group);
+    event.captured = captures(surface, view, &event, keycode, state, group);
     notify(surface, view, EventKind::KeyUp, event);
 }
 

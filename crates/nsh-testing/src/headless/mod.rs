@@ -4590,6 +4590,69 @@ mod tests {
         app.wait_for("ancestor b false").unwrap();
     }
 
+    /// A portaled pad in a view that hears and captures "a", and a second
+    /// portal under an unrelated view.
+    #[component]
+    fn PortalKeys() -> impl IntoElement {
+        let heard = signal(String::from("none"));
+        let sibling = signal(String::from("none"));
+        view()
+            .flex_1()
+            .child(
+                view()
+                    .test_id("host")
+                    .on_key_down(move |e: &KeyEvent| {
+                        heard.set(format!("{} {}", e.key.as_ref(), e.captured));
+                    })
+                    .capture_keys(KeyCapture::keys([
+                        Keystroke::parse("a", Os::Linux).unwrap(),
+                    ]))
+                    .child(text("host"))
+                    .child(overlay().child(
+                        view()
+                            .test_id("pad")
+                            .h(px(40.0))
+                            .focusable(true)
+                            .on_press(move |_: &()| {}),
+                    )),
+            )
+            .child(
+                view()
+                    .test_id("other")
+                    .child(text("other"))
+                    .child(overlay().child(
+                        view()
+                            .test_id("sibling")
+                            .h(px(40.0))
+                            .focusable(true)
+                            .on_press(move |_: &()| {})
+                            .on_key_down(move |e: &KeyEvent| {
+                                sibling.set(format!("{} {}", e.key.as_ref(), e.captured));
+                            }),
+                    )),
+            )
+            .child(text(move || format!("heard {}", heard.get())))
+            .child(text(move || format!("sibling {}", sibling.get())))
+    }
+
+    #[test]
+    fn a_portaled_view_uses_its_logical_parent_for_keys_and_capture() {
+        let mut app = start_linux(Root::of::<PortalKeys>());
+        app.first_render().unwrap();
+        // Tab enters the first portal: its pad has no listener, but the
+        // view around the Overlay hears the key and its capture applies.
+        app.press_key("tab").unwrap();
+        app.press_key("a").unwrap();
+        app.wait_for("heard a true").unwrap();
+        // Tab moves to the unrelated portal; its key is not captured by the
+        // first portal's rule.
+        app.press_key("tab").unwrap();
+        app.wait_for("heard Tab false").unwrap();
+        app.press_key("b").unwrap();
+        app.wait_for("sibling b false").unwrap();
+        app.wait_for("heard Tab false").unwrap();
+    }
+
     /// A focusable pad with no key listener of its own, under a view that
     /// hears keys and captures "a".
     #[component]

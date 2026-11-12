@@ -188,8 +188,11 @@ Eligible app shortcuts run first, including their window, repeat and pass-throug
 then existing native defaults. A captured Tab never arms traversal. Notifications are focus-scoped and use the
 mounted rule when each phase arrives: `KeyDown` and `KeyUp` reach listening, enabled ancestors within the native
 window, and a release goes to the view focused when the source reports it, even if another view (or a popup) heard
-the press. No original down target is retained, a focus move is no release, and a window deactivation clears held
-state without emitting a synthetic key up. Native menu popovers observe releases while holding GTK's keyboard grab,
+the press. Keyboard ancestry follows the internal `ViewProps::key_parent` routing override when a portaled
+`Overlay` sets it, not the native `Insert` parent the core placed it under; interest and capture both use that
+logical parent, while focus, hit testing and layout keep the native one. No original down target is retained, a
+focus move is no release, and a window deactivation clears held state without emitting a synthetic key up. Native
+menu popovers observe releases while holding GTK's keyboard grab,
 reporting them to the focused view without reporting popup presses as view input. Native inputs, web views, native
 components and videos own their keys: a capture around them does not intercept their editing. Ordinary views with
 no raw listener or capture keep the existing fast path.
