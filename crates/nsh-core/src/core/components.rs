@@ -4988,7 +4988,34 @@ impl<M: TextEngine> Core<M> {
     /// own parts' events never reach JS, which does not know them).
     pub fn component_event(&mut self, id: NodeId, kind: EventKind, payload: &EventPayload) -> bool {
         let _entered = self.components.runtime.enter();
-        let handled = self.dispatch_event(id, kind, payload);
+        let handled = if kind == EventKind::KeyDown {
+            // Native capture was decided from mounted props. These are
+            // notifications, not a request for a synchronous answer.
+            let mut next = Some(id);
+            let mut heard = false;
+            while let Some(id) = next {
+                let Ok(key) = self.key(id) else {
+                    break;
+                };
+                let node = &self.nodes[key as usize];
+                // A native window is a keyboard boundary even when its
+                // declarative root remains in another window's logical tree.
+                let window_root = node.kind == Kind::Modal
+                    && self.window_ids.values().any(|(root, _)| *root == id);
+                next = (node.parent != NO_KEY && !window_root)
+                    .then(|| self.nodes[node.parent as usize].id);
+                let disabled = node
+                    .props
+                    .as_ref()
+                    .is_some_and(|p| p.accessibility.state.disabled);
+                if !disabled {
+                    heard |= self.dispatch_event(id, kind, payload);
+                }
+            }
+            heard
+        } else {
+            self.dispatch_event(id, kind, payload)
+        };
         self.flush_component_emits();
         handled
     }
