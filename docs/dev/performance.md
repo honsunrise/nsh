@@ -4,6 +4,17 @@ Performance is the project's first priority; the rules are in `AGENTS.md`. Chang
 after `nsh test --trace` timings and item counts (`nsh trace` before it, in the records below). Current baselines
 (Apple Silicon except where noted):
 
+Cross-platform keyboard integration (2026-11-12, macOS arm64, debug, upstream `9fd11f836` against the core at
+`c46f72f8c`): one fresh process per version running the same counter command below on the same machine.
+
+| Phase | Before (µs/commit) | After (µs/commit) | Ops | Mount items | Nodes |
+|---|---:|---:|---:|---:|---:|
+| Initial frame | 681 | 744 | 57 | 51 | 21 |
+| Press `+1` | 765 | 918 | 10 | 7 | 24 |
+
+Both runs passed. Ordinary views emitted the same work; these single-run smoke timings are not a speed benchmark.
+Native GTK, AppKit, Android and browser checks separately exercised actual key delivery and capture.
+
 Focused-view keyboard input (Linux x86_64, debug, against `a44d5628b`): one fresh process per version running
 `printf 'await app.press("+1");\n' | target/debug/nsh test examples/counter/App.tsx --trace`.
 The counter has no raw key listeners; its work counts stay unchanged.

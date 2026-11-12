@@ -1612,7 +1612,8 @@ fn tab(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
         return false;
     }
     let focused = crate::text_input::focused(surface)
-        .or_else(|| crate::native::focused_component(surface).and_then(|id| surface.view(id)));
+        .or_else(|| crate::native::focused_component(surface).and_then(|id| surface.view(id)))
+        .or_else(|| crate::key_focus::focused(surface));
     let current = focused.and_then(|f| stops.iter().position(|v| *v == f));
     // Past the ends the window's focus moves on ([`tab_to_edge`]).
     let Some(next) = input::tab_stop(current, stops.len(), m.shift, false) else {
@@ -1643,20 +1644,19 @@ pub(crate) fn tab_to_edge(surface: &Rc<Surface>, shift: bool) -> bool {
     }
 }
 
-/// Moves the keyboard focus to `view`: a text field, or a native component
-/// (focused by [`crate::native::apply_focus`], which has the window).
+/// Moves the keyboard focus to a field, a native component, or a custom view.
 fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
-    if view.kind() == ViewKind::Native {
-        crate::native::tab_to(surface, view.id());
-    } else {
-        crate::text_input::tab_to(view);
+    match view.kind() {
+        ViewKind::Native => crate::native::tab_to(surface, view.id()),
+        ViewKind::Input => crate::text_input::tab_to(view),
+        _ => crate::key_focus::focus(surface, view),
     }
 }
 
 /// The Tab stops shown under `view`, in tree order (a scroll view's
 /// content as it is on screen; a shown overlay's content after the view it
-/// follows, [`input::tab_order`]): enabled text fields and
-/// the native components that take the keyboard.
+/// follows, [`input::tab_order`]): enabled fields, focusable custom views,
+/// and native components that take the keyboard.
 fn collect_stops(surface: &Surface, view: &NshView, out: &mut Vec<NshView>) {
     let skipped = |view: &NshView| {
         let s = view.state();
@@ -1681,7 +1681,7 @@ fn collect_stops(surface: &Surface, view: &NshView, out: &mut Vec<NshView>) {
         match s.kind {
             ViewKind::Input => !s.props.accessibility.state.disabled,
             ViewKind::Native => crate::native::focusable(surface, s.id),
-            _ => false,
+            _ => s.props.focus_stop(s.events.contains(EventKind::Press)),
         }
     }));
 }
@@ -1954,6 +1954,13 @@ fn down(
         input.js_block.set(false);
     }
     let views = chain(&hit.view);
+    if !native
+        && let Some(target) = views
+            .iter()
+            .find(|view| view.state().props.focusable == Some(true))
+    {
+        crate::key_focus::focus(surface, target);
+    }
     // The gate follows the first pointer only, as on the other platforms.
     let first = input.pointers.borrow().is_empty();
     let options = GrabOptions::new(touch, native, selects, first);
@@ -3901,6 +3908,48 @@ mod tests {
     }
 
     #[test]
+    fn hardware_keys_tab_between_custom_views_and_capture_keeps_the_focus() {
+        let (surface, first) = focused_surface();
+        let second = view(
+            &surface.root,
+            4,
+            ViewKind::View,
+            rect(0.0, 120.0, 100.0, 100.0),
+        );
+        second.state_mut().events.set(EventKind::Press, true);
+        crate::key_focus::clear(&surface);
+        let tab = || crate::keys::RawKey::down(&stroke_of("tab", None), false);
+
+        assert!(press(&surface, VK_TAB, true, tab()));
+        assert_eq!(crate::key_focus::focused(&surface), Some(first.clone()));
+        first.state_mut().props.key_capture = nsh_core::KeyCapture::All;
+        assert!(press(&surface, VK_TAB, true, tab()));
+        assert_eq!(crate::key_focus::focused(&surface), Some(first.clone()));
+        first.state_mut().props.key_capture = nsh_core::KeyCapture::None;
+        assert!(press(&surface, VK_TAB, true, tab()));
+        assert_eq!(crate::key_focus::focused(&surface), Some(second.clone()));
+        // The embedding window gets Tab after the final stop.
+        assert!(!press(&surface, VK_TAB, true, tab()));
+        assert_eq!(crate::key_focus::focused(&surface), Some(second));
+    }
+
+    #[test]
+    fn a_pointer_press_focuses_an_explicit_custom_view_without_a_press_handler() {
+        let (surface, first) = focused_surface();
+        crate::key_focus::clear(&surface);
+        down(
+            &surface,
+            Key::Mouse,
+            10.0,
+            10.0,
+            1.0,
+            1,
+            Modifiers::default(),
+        );
+        assert_eq!(crate::key_focus::focused(&surface), Some(first));
+    }
+
+    #[test]
     fn capture_rules_apply_from_the_focus_up_through_its_ancestors() {
         let root = root();
         let outer = view(&root, 2, ViewKind::View, rect(0.0, 0.0, 300.0, 300.0));
@@ -3970,12 +4019,12 @@ mod tests {
         let surface = Surface::new(nsh_engine::Environment::default());
         surface.root.set_invalidate(Rc::new(|| {}));
         surface.root.state_mut().frame = rect(0.0, 0.0, 400.0, 400.0);
-        // 1: the logical ancestor; 2: the portal host at the root; 3: the
-        // overlay's content, mounted in 2 and logically inside 1; 4: a
-        // sibling portal's content in 2, logically inside 5, which has no
-        // keys.
+        // 2: the logical ancestor; 3: the portal host at the root; 4: the
+        // overlay's content, mounted in 3 and logically inside 2; 5: a
+        // sibling portal's content in 3, logically inside 6, which has no
+        // keys. ROOT_ID is reserved for the surface itself.
         let tree: [(NodeId, NodeId); 5] =
-            [(1, ROOT_ID), (2, ROOT_ID), (3, 2), (4, 2), (5, ROOT_ID)];
+            [(2, ROOT_ID), (3, ROOT_ID), (4, 3), (5, 3), (6, ROOT_ID)];
         for &(id, parent) in &tree {
             let mut mounter = surface.mounter.borrow_mut();
             mounter.apply(
@@ -3995,21 +4044,21 @@ mod tests {
             );
         }
         surface.mounter.borrow_mut().end_batch(&surface);
-        let ancestor = surface.view(1).unwrap();
-        let host = surface.view(2).unwrap();
-        let content = surface.view(3).unwrap();
-        let sibling = surface.view(4).unwrap();
+        let ancestor = surface.view(2).unwrap();
+        let host = surface.view(3).unwrap();
+        let content = surface.view(4).unwrap();
+        let sibling = surface.view(5).unwrap();
         // The core's Insert parent is the portal host, not the logical one.
         assert_eq!(content.parent_view(), Some(host.clone()));
         {
             let mut state = content.state_mut();
             state.props.focusable = Some(true);
-            state.props.key_parent = Some(1);
+            state.props.key_parent = Some(2);
         }
         {
             let mut state = sibling.state_mut();
             state.props.focusable = Some(true);
-            state.props.key_parent = Some(5);
+            state.props.key_parent = Some(6);
         }
         let raw = || crate::keys::RawKey::down(&stroke_of("?", Some("?")), false);
         // The source's payload is untouched, its matching stroke is the

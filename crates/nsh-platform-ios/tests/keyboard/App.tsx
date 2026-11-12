@@ -95,7 +95,7 @@ function App() {
     },
   };
 
-  const row = { height: 64, backgroundColor: "#eeeeee", margin: 8 };
+  const row = { height: 32, backgroundColor: "#eeeeee", margin: 4 };
 
   return (
     <View style={{ flex: 1, paddingTop: 64, backgroundColor: "#ffffff" }}>
@@ -134,7 +134,7 @@ function App() {
       <View {...focusable("noPress", undefined, false)} style={row}>
         <Text>no press</Text>
       </View>
-      <Scroll testID="scrollAncestor" style={{ height: 180, margin: 8 }} {...scrollProps}>
+      <Scroll testID="scrollAncestor" style={{ height: 80, margin: 8 }} {...scrollProps}>
         <View {...focusOnly("scrollChild")} style={{ height: 48, backgroundColor: "#dddddd" }}>
           <Text>scroll child</Text>
         </View>

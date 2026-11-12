@@ -452,8 +452,8 @@ pub struct ViewProps {
     /// default, leaves it to the presses ([`ViewProps::focus_stop`]).
     pub focusable: Option<bool>,
     /// Keys consumed by this view or a focused descendant before native
-    /// defaults run. Linux decides from the mounted rules without waiting
-    /// for a listener (`Interactive::capture_keys`).
+    /// defaults run. Backends decide from the mounted rules without
+    /// waiting for a listener (`Interactive::capture_keys`).
     pub key_capture: crate::KeyCapture,
     /// Where keyboard ancestry continues for a portaled view (an overlay
     /// whose native parent is its root view while its logical parent is
@@ -486,10 +486,9 @@ impl ViewProps {
     /// pressed by Return or Space (its keys reach it through the app's
     /// keymap while it has the focus), and a view needs no press handler to
     /// be focusable, which would take the presses of a pressable around it
-    /// (a chart in a card that opens a page). The platforms that move the
-    /// keyboard focus between views (macOS, the web, Linux and the headless
-    /// driver) all decide with this; inputs that edit are stops by their
-    /// own rule, and each platform adds what it knows of visibility.
+    /// (a chart in a card that opens a page). Backends use this decision
+    /// for view focus stops; inputs that edit are stops by their own rule,
+    /// and each platform adds what it knows of visibility.
     pub fn focus_stop(&self, takes_presses: bool) -> bool {
         self.focusable.unwrap_or(takes_presses) && !self.accessibility.state.disabled
     }
