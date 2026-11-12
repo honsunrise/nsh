@@ -112,6 +112,7 @@ pub(crate) fn press(surface: &Rc<Surface>, vk: u16, modifiers: Modifiers) {
                 scan: 0,
                 extended: false,
                 sys: false,
+                translated: false,
             },
         );
         // Unhandled printable keys type their character, as

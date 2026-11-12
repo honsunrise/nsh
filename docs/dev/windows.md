@@ -31,6 +31,7 @@ The keyboard tests process real messages (`TranslateMessage` / `DispatchMessageW
 ```sh
 cargo test -p nsh-platform-windows keyboard
 cargo test -p nsh-platform-windows a_captured_key_is_never_translated
+cargo test -p nsh-platform-windows a_binding_consuming_an_untranslated_key_keeps_an_unrelated_character
 ```
 
 CI runs the crate's whole test binary on windows-latest (`.github/workflows/windows.yml`), which includes both;
@@ -218,8 +219,11 @@ under non-Latin layouts (Cyrillic, Greek), so Ctrl+C is the same key on all of t
 **App shortcuts** (`nsh`'s `keymap`, `keymap.rs`): `input::key` matches every key down against the mounted table
 (`Keymap::find`) right after the window's shortcuts (`Surface::shortcuts`: full screen, the dev host's reload) and
 the dialogs (`system::key`), and before the application menu's shortcuts (`chrome::shortcut`), the focused field,
-selectable text, navigation and scroll views. A match is consumed, its queued `WM_CHAR` / `WM_SYSCHAR` removed (`PeekMessageW`), and reported as
-the root's `KeyCommand`; an auto-repeat (`KeyEvent::repeat`) of a binding without `repeat` is consumed silently.
+selectable text, navigation and scroll views. A match is consumed and reported as the root's `KeyCommand`; its
+queued `WM_CHAR` / `WM_SYSCHAR` (`PeekMessageW`) are removed only when the message was translated at all
+(`KeyEvent::translated`): an untranslated key — a captured private `WM_NSH_KEYDOWN`, or input synthesized in the
+backend — queued none, and none are taken for it. An auto-repeat (`KeyEvent::repeat`) of a binding without `repeat`
+is consumed silently.
 Keys are matched by virtual key code (letters and digits on every layout, punctuation by the US `VK_OEM_*` keys); a
 focused text field counts as editing (`when`). With feature `dev`, Ctrl+R is never matched (the dev host reloads).
 

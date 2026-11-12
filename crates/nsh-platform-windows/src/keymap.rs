@@ -2,9 +2,12 @@
 //! mounts ([`MountItem::Keymap`](nsh_core::MountItem::Keymap)), matched on
 //! every key down the window gets ([`crate::input::key`]): after the dialogs
 //! the surface shows, before the focused field, selectable text, navigation
-//! and scroll views. A key that fires a binding is consumed (its `WM_CHAR`
-//! too) and reported to JS with the root's `KeyCommand` event; JS runs the
-//! handler afterwards.
+//! and scroll views. A key that fires a binding is consumed and reported to
+//! JS with the root's `KeyCommand` event; JS runs the handler afterwards.
+//! Only a key whose message `TranslateMessage` actually translated has
+//! characters to remove ([`KeyEvent::translated`]): an untranslated key (a
+//! captured private message, input synthesized inside the backend) made
+//! none, and none are taken for it.
 //!
 //! Keys are matched by virtual key code: letters and digits are the same
 //! on every layout (a Cyrillic layout's keys have the US layout's codes),
@@ -65,7 +68,11 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
             EventPayload::Value(PayloadValue::Number(id as f64)),
         );
     }
-    if found.consumed() {
+    if found.consumed() && event.translated {
+        // Only characters this key's translation made may go: a key that
+        // was never translated (a captured private message, input
+        // synthesized in the backend) queued none, and anything found
+        // would be someone else's.
         drop_char(surface);
     }
     found.consumed()
