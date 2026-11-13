@@ -168,6 +168,11 @@ go elsewhere under these rules rather than into them.
   `desktop={{…}}`: iOS, macOS, Windows and Linux have the swipes, Android and the web none; decided by the user,
   2026-10-29). Each object is typed (`IOSProps`, `AndroidProps`, `MacOSProps`, `DesktopProps`, an element's own
   extending them), so a key no platform has fails the type check.
+- **Common traits before platform extensions**: shared operations have one public Rust trait and one contract on
+  every platform (`WebDownloadControl`: accept, cancel and explicit delegation). A `<Element><Platform>Ext` trait
+  adds only a genuinely platform-specific mechanism (`WebViewAndroidExt::download_scope`); difficulty implementing
+  a shared operation is not a reason to move it into an extension. Its TS-facing configuration belongs in the
+  existing typed platform object. Shared method names alone do not establish equivalent platform behavior.
 - **One definition of desktop**: desktop is a desktop OS (macOS, Windows, Linux), the web in the desktop idiom or
   a terminal (`Idiom::desktop_on`, `Environment::desktop()`); everything else is mobile, Mac Catalyst included (it
   runs the iOS backend: `ios={{…}}` applies). `desktop={{…}}` props, `platform.select({ desktop, mobile })`,

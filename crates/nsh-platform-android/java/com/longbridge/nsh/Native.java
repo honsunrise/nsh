@@ -95,7 +95,12 @@ final class Native {
     static final int KEY_DOWN = 83;
     static final int KEY_UP = 84;
     static final int WEB_VIEW_REPLY = 85;
+    /** The app's pending-download event kind (the core emits it; never this side). */
     static final int DOWNLOAD_PENDING = 86;
+    /** A web view download's offer, progress and end (internal, `DownloadOffer`…). */
+    static final int DOWNLOAD_OFFER = 87;
+    static final int DOWNLOAD_PROGRESS = 88;
+    static final int DOWNLOAD_END = 89;
 
     /**
      * Draws the SVG {@code bytes} for a view {@code maxPx} pixels on its longer side, with its shorter side that long
@@ -290,6 +295,20 @@ final class Native {
      * {@code String} values), or a single value when {@code keys} is null.
      */
     static native void eventMap(long handle, int id, int kind, String[] keys, Object[] values);
+
+    /**
+     * A download report channel for a web view: the engine's control at
+     * {@code handle}, cloned so later stop acknowledgements still reach its
+     * download cleanup sink after {@link #destroy} dropped the host (0 when
+     * no engine runs). The caller releases it with {@link #downloadLeaseRelease}.
+     */
+    static native long downloadLease(long handle);
+
+    /** Reports an internal download/request event (JSON) through {@code lease}. */
+    static native void downloadReport(long lease, int id, int kind, String json);
+
+    /** Drops a {@link #downloadLease} once no download of its view is left. */
+    static native void downloadLeaseRelease(long lease);
 
     /** `onPaste`: the pasted text, the images' encoded bytes and local files' {@code file:} URLs. */
     static native void paste(long handle, int id, String text, byte[][] images, String[] uris);

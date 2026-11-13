@@ -103,8 +103,13 @@ Add it to the app module, for example from a `libs` folder:
 dependencies {
     debugImplementation(files("libs/nsh-dev.aar"))
     releaseImplementation(files("libs/nsh.aar"))
+    implementation("androidx.webkit:webkit:1.15.0")
 }
 ```
+
+Resolve AndroidX from `google()` and `mavenCentral()`. The AAR contains NSH's own classes; Gradle resolves
+AndroidX WebKit and its dependencies with the rest of your app. Use compileSdk 33 or newer and Android Gradle
+Plugin 7.2 or newer. Standalone APKs built by `nsh package` include these runtime dependencies automatically.
 
 ## Ship a bundle with the app
 

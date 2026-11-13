@@ -644,6 +644,9 @@ extern "system" fn Java_com_longbridge_nsh_Native_create(
             // bitmaps with the on-screen canvas's painter.
             canvas_render: true,
             web_evaluate: true,
+            // Downloads: offers, the three commands and their answers
+            // (`WebBox.java`, `WebDownloads.java`).
+            webview_requests: true,
             // wgpu on Vulkan or GLES, in builds with it, until it finds no
             // GPU.
             shaders: nsh_engine::shader::LINKED,
@@ -1750,6 +1753,80 @@ fn audio_payload(fields: &[(&'static str, PayloadValue)]) -> Option<EventPayload
     Some(EventPayload::Audio { id, event })
 }
 
+/// A web view's download reports, detached from the [`Host`] they began
+/// under: `NshView.destroy` takes the Java handle and drops the engine
+/// before the view's components are destroyed, so a late stop
+/// acknowledgement must still reach the engine's download cleanup sink.
+/// Only the engine's control (its channel and cleanup sink) is cloned; the
+/// host, the UI and the view are not kept alive.
+struct DownloadLease {
+    control: EngineControl,
+}
+
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_downloadLease(
+    _: JNIEnv<'_>,
+    _: JClass<'_>,
+    handle: jlong,
+) -> jlong {
+    if handle == 0 {
+        return 0;
+    }
+    // SAFETY: Java passes its live handle (called on the UI thread, before
+    // `Native.destroy`).
+    let host = unsafe { host(handle) };
+    match host.control() {
+        Some(control) => Box::into_raw(Box::new(DownloadLease { control })) as jlong,
+        None => 0,
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_downloadReport(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+    lease: jlong,
+    node: jint,
+    kind: jint,
+    json: JString<'_>,
+) {
+    if lease == 0 {
+        return;
+    }
+    let Some(kind) = encode::kind_from(kind) else {
+        return;
+    };
+    let Ok(json) = env.get_string(&json) else {
+        return;
+    };
+    let text = String::from(json);
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        log::debug!("web view: dropped a malformed download report: {text}");
+        return;
+    };
+    // SAFETY: the lease came from `downloadLease`, and Java releases it once,
+    // after every report of its view.
+    let lease = unsafe { &*(lease as *const DownloadLease) };
+    // The control records a stop with its cleanup sink before the channel
+    // send, so this works after the engine thread is gone too.
+    lease
+        .control
+        .dispatch_event(node as NodeId, kind, EventPayload::Json(value));
+}
+
+#[unsafe(no_mangle)]
+extern "system" fn Java_com_longbridge_nsh_Native_downloadLeaseRelease(
+    _: JNIEnv<'_>,
+    _: JClass<'_>,
+    lease: jlong,
+) {
+    if lease == 0 {
+        return;
+    }
+    // SAFETY: as above; Java releases exactly once.
+    drop(unsafe { Box::from_raw(lease as *mut DownloadLease) });
+}
+
 /// An event with an object payload: `keys` and `values` (`Double`,
 /// `Boolean` or `String`), or with a single `value` when `keys` is null.
 #[unsafe(no_mangle)]
@@ -1907,6 +1984,27 @@ extern "system" fn Java_com_longbridge_nsh_Native_eventMap(
             EventPayload::Map(fields)
         }
     };
+    if matches!(
+        kind,
+        EventKind::DownloadOffer
+            | EventKind::DownloadProgress
+            | EventKind::DownloadEnd
+            | EventKind::WebViewReply
+    ) {
+        // `WebBox.java`'s download sink and request answers carry their own
+        // JSON objects: the core reads them as `EventPayload::Json`.
+        let EventPayload::Value(PayloadValue::Str(text)) = payload else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            log::debug!("web view: dropped malformed {kind:?}: {text}");
+            return;
+        };
+        if let Some(control) = host.control() {
+            control.dispatch_event(id as NodeId, kind, EventPayload::Json(value));
+        }
+        return;
+    }
     if kind == EventKind::WebEvaluation {
         let generation = match &payload {
             EventPayload::Map(fields) => fields.iter().find_map(|(key, value)| match value {

@@ -313,6 +313,19 @@ Things that were found the hard way. Read the section of the area you change bef
 
 ## Android
 
+- **Android download notifications do not retain the original response**: a `DownloadListener` followed by
+  `DownloadManager` issues a second GET. Native probes on Android 16 / WebView 133 observed a one-use URL fail with
+  410 on that second request, and a successful POST attachment become a bodiless GET returning 405. A URL-to-method
+  map is not request identity; concurrent requests and redirects make it unsafe to infer permission to replay.
+- **Android download interception is request-side**: `shouldInterceptRequest` sees POST but exposes no body.
+  An HTTP `<a download>` can arrive with `isForMainFrame=false` (observed on WebView 133); filtering only main-frame
+  requests loses that case. A synthetic response has no final-URL field and cannot represent an HTTP redirect:
+  returning redirected HTML under the original URL changes document identity. Request cookies must retain the
+  browser's SameSite/partition context; a URL-only `CookieManager.getCookie` lookup is not an equivalent request.
+- **Native download cancellation is asynchronous**: disconnecting or asking an engine to cancel is not proof that
+  its writer has stopped. Delete only owned staging after stop acknowledgement, including during WebView teardown.
+  A command reply timeout must not turn an unknown writer state into permission to unlink or publish a file.
+
 - **Android, responders inside pressable views**: a view that takes no press of its own (a `RichEditor`'s selection
   handle) leaves the touch to the nearest pressable ancestor, which keeps tracking it: it raised its long press while a
   finger held the handle and its press on the lift. `SetJsResponder` with a block ends the presses of the ancestors

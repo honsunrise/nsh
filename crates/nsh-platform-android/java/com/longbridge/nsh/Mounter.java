@@ -343,6 +343,7 @@ final class Mounter {
                         v.setClickable((mask & (1L << Native.PRESS)) != 0);
                     }
                     if (v instanceof ScrollBox) ((ScrollBox) v).events = mask;
+                    if (v instanceof WebBox) ((WebBox) v).events(mask, high);
                     boolean presses = (mask & ((1L << Native.PRESS) | (1L << Native.LONG_PRESS)
                             | (1L << Native.PRESS_IN) | (1L << Native.PRESS_OUT))) != 0;
                     if (v instanceof TextBox && presses && ((TextBox) v).press == null) {
@@ -2293,6 +2294,23 @@ final class Mounter {
                 if (v instanceof WebBox) ((WebBox) v).command(kind, text);
                 break;
             }
+            case 53: {
+                int operation = b.getInt();
+                int request = b.getInt();
+                String download = (String) objects[b.getInt()];
+                String staging = operation == 0 ? (String) objects[b.getInt()] : null;
+                if (v instanceof WebBox) {
+                    ((WebBox) v).download(operation, request, download, staging);
+                } else if (operation == 1) {
+                    // No web view holds it: nothing writes, so nothing is
+                    // left to stop, and the core may clean.
+                    mounterOk(id, request);
+                } else {
+                    // No web view to ask: answer, or the core waits for it.
+                    mounterReply(id, request, "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM: not a web view");
+                }
+                break;
+            }
             case 46: {
                 String url = (String) objects[b.getInt()];
                 int count = b.getInt();
@@ -2540,6 +2558,19 @@ final class Mounter {
         return i >= 0 ? (String) objects[i] : null;
     }
 
+    /** {@code encode.rs}'s JSON array of {@code download_scope} patterns. */
+    private static String[] scope(String json) {
+        try {
+            org.json.JSONArray array = new org.json.JSONArray(json);
+            String[] patterns = new String[array.length()];
+            for (int i = 0; i < patterns.length; i++) patterns[i] = array.getString(i);
+            return patterns;
+        } catch (org.json.JSONException error) {
+            android.util.Log.w("nsh", "web view: unrecognized download_scope: " + error);
+            return new String[0];
+        }
+    }
+
     /** `encode.rs` `native_props`. */
     private void nativeProps(ByteBuffer b, Object[] objects) {
         View v = views.get(b.getInt());
@@ -2557,7 +2588,12 @@ final class Mounter {
                 }
                 String injected = optString(b, objects), before = optString(b, objects), ua = optString(b, objects);
                 boolean scroll = b.getInt() != 0, js = b.getInt() != 0, incognito = b.getInt() != 0;
-                if (v instanceof WebBox) ((WebBox) v).configure(source, injected, before, ua, scroll, js, incognito);
+                boolean deferDownloads = b.getInt() != 0;
+                String[] downloadScope = scope((String) objects[b.getInt()]);
+                if (v instanceof WebBox) {
+                    ((WebBox) v).configure(source, injected, before, ua, scroll, js, incognito,
+                            downloadScope, deferDownloads);
+                }
                 break;
             }
             case 4: {
@@ -2816,6 +2852,18 @@ final class Mounter {
         Native.canvasImage(handle, request, bytes, failure, error);
     }
 
+    /** Answers a web view request that needed nothing done. */
+    private void mounterOk(int node, int request) {
+        eventMap(node, Native.WEB_VIEW_REPLY, null,
+                new Object[] {"{\"id\":" + request + ",\"ok\":true}"});
+    }
+
+    /** Answers a web view request whose view is gone. */
+    private void mounterReply(int node, int request, String error) {
+        eventMap(node, Native.WEB_VIEW_REPLY, null,
+                new Object[] {"{\"id\":" + request + ",\"ok\":false,\"error\":"
+                        + org.json.JSONObject.quote(error) + "}"});
+    }
     void eventMap(int id, int kind, String[] keys, Object[] values) {
         long handle = handle();
         if (handle == 0) return;

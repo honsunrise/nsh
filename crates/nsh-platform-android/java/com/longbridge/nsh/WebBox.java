@@ -14,6 +14,7 @@ import android.webkit.WebChromeClient;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Objects;
+import java.util.regex.Pattern;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
@@ -49,9 +51,35 @@ final class WebBox extends WidgetBox {
     private boolean scrollable = true;
     // The last props, to set up a WebView made after a renderer ended.
     private boolean javaScriptEnabled, incognito;
-    private boolean disposed, processGone;
+    private volatile boolean disposed, processGone;
     private final Handler evaluationHandler = new Handler(Looper.getMainLooper());
     private final HashMap<Integer, Evaluation> evaluations = new HashMap<>();
+    /** Downloads: the held in-scope responses and their writer. */
+    private final WebDownloads downloads;
+    /** {@code download_scope}, compiled (empty: nothing is intercepted). */
+    private volatile Pattern[] downloadScope = new Pattern[0];
+    /** The core asked the view to hold downloads ({@code defer_downloads}). */
+    private boolean deferDownloads;
+    /** The node's event mask, to know whether a download is listened for. */
+    private long eventsMask, eventsHigh;
+    /** Whether downloads are held, readable from the interception thread. */
+    private volatile boolean holdDownloads;
+    /** Whether the WebView's own request cookies are available (tried once). */
+    private boolean cookiesTried;
+    private volatile boolean requestCookies;
+    /** Whether the scope's missing feature was reported (once per web view). */
+    private boolean scopeReported;
+    /**
+     * The download report lease: the engine control cloned when this view
+     * can hold downloads, so stops reported during teardown still reach
+     * that engine's cleanup sink after {@code Native.destroy}. It never
+     * holds the host or this view, and is released once the view is
+     * disposed and every held download ended.
+     */
+    private final Object downloadLeaseLock = new Object();
+    private long downloadLease;
+    private boolean downloadLeaseClosed, downloadsDisposed;
+    private int heldDownloads;
     // The shared page wrapper enforces the result limit; leave room for its envelope.
     private static final int MAX_ENVELOPE_BYTES = 1048576 + 1024;
 
@@ -72,7 +100,142 @@ final class WebBox extends WidgetBox {
     private WebBox(Context context, Mounter mounter, int id, WebView web) {
         super(context, mounter, id, web);
         this.web = web;
+        this.downloads = new WebDownloads(context, new Sink(), new DownloadsLifecycle());
         attach(web);
+    }
+
+    /** What the download transport reports, as the core's internal events. */
+    private final class Sink implements WebDownloads.Sink {
+        @Override
+        public void offer(WebDownloads.Offer offer) {
+            JSONObject json = new JSONObject();
+            try {
+                json.put("id", offer.id);
+                json.put("url", offer.url);
+                json.put("filename", offer.filename);
+                json.put("mime_type", offer.mimeType == null ? JSONObject.NULL : offer.mimeType);
+                json.put("bytes", offer.bytes < 0 ? JSONObject.NULL : Long.valueOf(offer.bytes));
+                json.put("method", offer.method == null ? JSONObject.NULL : offer.method);
+                json.put("source", offer.source);
+                json.put("can_delegate", offer.canDelegate);
+            } catch (org.json.JSONException error) {
+                android.util.Log.w("nsh", "web view: a download offer could not be encoded: " + error);
+                return;
+            }
+            event(Native.DOWNLOAD_OFFER, json);
+        }
+
+        @Override
+        public void progress(String id, long received) {
+            JSONObject json = new JSONObject();
+            try {
+                json.put("id", id);
+                json.put("received", received);
+            } catch (org.json.JSONException error) {
+                return;
+            }
+            event(Native.DOWNLOAD_PROGRESS, json);
+        }
+
+        @Override
+        public void finished(String id, long bytes) {
+            JSONObject json = new JSONObject();
+            try {
+                json.put("id", id);
+                json.put("outcome", "finished");
+                json.put("bytes", bytes);
+            } catch (org.json.JSONException error) {
+                return;
+            }
+            event(Native.DOWNLOAD_END, json);
+        }
+
+        @Override
+        public void failed(String id, String code, String message) {
+            JSONObject json = new JSONObject();
+            try {
+                json.put("id", id);
+                json.put("outcome", "failed");
+                json.put("code", code == null ? JSONObject.NULL : code);
+                json.put("message", message);
+            } catch (org.json.JSONException error) {
+                return;
+            }
+            event(Native.DOWNLOAD_END, json);
+        }
+
+        @Override
+        public void reply(int request, String error) {
+            JSONObject json = new JSONObject();
+            try {
+                json.put("id", request);
+                json.put("ok", error == null);
+                if (error != null) json.put("error", error);
+            } catch (org.json.JSONException e) {
+                return;
+            }
+            // A request's answer is internal: no listener selects it.
+            event(Native.WEB_VIEW_REPLY, json);
+        }
+
+        private void event(int kind, JSONObject json) {
+            // Through the lease, not the view: after `NshView.destroy` the
+            // Java handle is gone, but the original engine's download
+            // cleanup sink must still hear a late stop (and never another
+            // app's engine).
+            // Held across the call: release drops the lease under the same
+            // lock, so a report can never outlive it. A UI-thread report may
+            // acquire it late (the engine is installed while the first
+            // batch is applied).
+            synchronized (downloadLeaseLock) {
+                if (downloadLease == 0 && !downloadLeaseClosed && !downloadsDisposed
+                        && Looper.myLooper() == Looper.getMainLooper()) {
+                    downloadLease = Native.downloadLease(mounter.handle());
+                }
+                if (downloadLease == 0) return;
+                Native.downloadReport(downloadLease, id, kind, json.toString());
+            }
+        }
+    }
+
+    /** A held download's life, for the report lease. */
+    private final class DownloadsLifecycle implements WebDownloads.Lifecycle {
+        @Override
+        public void retained() {
+            synchronized (downloadLeaseLock) {
+                heldDownloads++;
+            }
+        }
+
+        @Override
+        public void retired() {
+            synchronized (downloadLeaseLock) {
+                if (heldDownloads > 0) heldDownloads--;
+            }
+            releaseDownloadLease();
+        }
+    }
+
+    /**
+     * Clones this view's engine control for download reports, once: called
+     * on the UI thread when the view starts holding downloads, before any
+     * request. A null control (no engine yet) leaves it for the next call.
+     */
+    private void acquireDownloadLease() {
+        synchronized (downloadLeaseLock) {
+            if (downloadLease != 0 || downloadLeaseClosed || downloadsDisposed) return;
+            downloadLease = Native.downloadLease(mounter.handle());
+        }
+    }
+
+    /** Releases the lease once the view is disposed and nothing is held. */
+    private void releaseDownloadLease() {
+        synchronized (downloadLeaseLock) {
+            if (!downloadsDisposed || heldDownloads != 0 || downloadLease == 0) return;
+            Native.downloadLeaseRelease(downloadLease);
+            downloadLease = 0;
+            downloadLeaseClosed = true;
+        }
     }
 
     private void attach(WebView web) {
@@ -80,6 +243,7 @@ final class WebBox extends WidgetBox {
         web.addJavascriptInterface(new Bridge(), "nsh");
         web.setWebViewClient(new Client());
         web.setWebChromeClient(new Chrome());
+        web.setDownloadListener(this::downloadStarted);
         web.setOnTouchListener((v, e) -> {
             if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 // The page scrolls itself: keep enclosing scroll views out.
@@ -133,6 +297,23 @@ final class WebBox extends WidgetBox {
             mounter.eventMap(id, Native.ERROR, new String[] {"message", "code", "url"},
                     new Object[] {"navigation to " + url + " is not granted", "ERR_ACCESS_DENIED", url});
             return true;
+        }
+
+        /**
+         * An in-scope GET is NSH's own single request: the attachment is
+         * held for the app and the page sees an empty response; anything
+         * else is served from that same response. Null leaves the request
+         * to the WebView.
+         */
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            if (disposed || processGone || view != web) return null;
+            // Without the WebView's own request cookies the request could not
+            // be reproduced faithfully (§ COOKIE_INTERCEPT): the WebView
+            // carries it instead, and its download is a `None` offer.
+            Pattern[] scope = downloadScope;
+            if (scope.length == 0 || !requestCookies || !holdsDownloads()) return null;
+            return downloads.intercept(scope, request);
         }
 
         @Override
@@ -268,6 +449,60 @@ final class WebBox extends WidgetBox {
         }
     }
 
+    /**
+     * Whether the core holds this view's downloads: it asked to defer them,
+     * or something listens for the app's download events.
+     */
+    private boolean holdsDownloads() {
+        return holdDownloads;
+    }
+
+    /** The node's new event mask (`Mounter`'s EVENTS), on the UI thread. */
+    void events(long mask, long high) {
+        eventsMask = mask;
+        eventsHigh = high;
+        recomputeHold();
+    }
+
+    private void recomputeHold() {
+        holdDownloads = deferDownloads || wanted(Native.DOWNLOAD) || wanted(Native.DOWNLOAD_PENDING);
+        if (holdDownloads) acquireDownloadLease();
+    }
+
+    private boolean wanted(int kind) {
+        if (kind >= 64) return (eventsHigh & (1L << (kind - 64))) != 0;
+        return (eventsMask & (1L << kind)) != 0;
+    }
+
+    /**
+     * {@code DownloadListener}: the response is already gone (Chromium
+     * discarded it), so only its metadata can be offered, and delegating it
+     * would be a new request whose method this view never saw.
+     */
+    private void downloadStarted(String url, String userAgent, String contentDisposition,
+            String mimeType, long contentLength) {
+        if (disposed || processGone || !holdsDownloads()) return;
+        downloads.listenerDownload(url, contentDisposition, mimeType, contentLength);
+    }
+
+    /**
+     * Turns on the WebView's request cookies exactly once per WebView, and
+     * says so when a declared scope cannot be honored.
+     */
+    private void ensureRequestCookies() {
+        if (cookiesTried) return;
+        cookiesTried = true;
+        requestCookies = WebDownloads.enableRequestCookies(web.getSettings());
+        if (!requestCookies && !scopeReported) {
+            scopeReported = true;
+            String message = "download_scope needs the WebView COOKIE_INTERCEPT feature,"
+                    + " which this system WebView does not support: the scope issues no request";
+            android.util.Log.w("nsh", "web view: " + message);
+            mounter.eventMap(id, Native.ERROR, new String[] {"message", "code"},
+                    new Object[] {message, "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"});
+        }
+    }
+
     private void state(int kind, String url, boolean loading) {
         String[] keys = {"url", "title", "loading", "canGoBack", "canGoForward"};
         Object[] values = {url, Objects.toString(web.getTitle(), ""), loading, web.canGoBack(), web.canGoForward()};
@@ -279,10 +514,15 @@ final class WebBox extends WidgetBox {
 
     @SuppressWarnings("deprecation") // setSaveFormData: still honored before Android 8.
     void configure(Object[] source, String injected, String injectedBefore, String userAgent,
-            boolean scrollable, boolean javaScriptEnabled, boolean incognito) {
+            boolean scrollable, boolean javaScriptEnabled, boolean incognito,
+            String[] downloadScope, boolean deferDownloads) {
         if (disposed) return;
+        this.deferDownloads = deferDownloads;
+        recomputeHold();
         boolean revived = processGone;
         if (processGone && !revive()) return;
+        this.downloadScope = WebDownloads.compile(downloadScope);
+        if (downloadScope.length > 0) ensureRequestCookies();
         if (!javaScriptEnabled) cancelEvaluations("ERR_NSH_WEBVIEW_SCRIPT", "JavaScript is disabled");
         // Read with the first props: the core keeps it from changing.
         if (this.source == null && incognito) {
@@ -341,6 +581,11 @@ final class WebBox extends WidgetBox {
         attach(fresh);
         replaceWidget(fresh);
         processGone = false;
+        // The fresh WebView has its own settings: its request cookies must
+        // be enabled again when a scope is set.
+        cookiesTried = false;
+        requestCookies = false;
+        if (downloadScope.length > 0) ensureRequestCookies();
         WebSettings settings = fresh.getSettings();
         if (incognito) {
             settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
@@ -375,6 +620,20 @@ final class WebBox extends WidgetBox {
                         + JSONObject.quote(text) + " }));", null);
                 break;
             default: break;
+        }
+    }
+
+    /**
+     * Command 53 of `Mounter.command`: the core's {@code WebViewRequest}.
+     * {@code operation} 0 starts the copy into {@code staging}, 1 cancels,
+     * 2 delegates; anything else has no Android mechanism and is answered.
+     */
+    void download(int operation, int request, String id, String staging) {
+        switch (operation) {
+            case 0: downloads.start(id, staging, request); break;
+            case 1: downloads.cancel(id, request); break;
+            case 2: downloads.delegate(id, request); break;
+            default: downloads.unsupported(request);
         }
     }
 
@@ -499,6 +758,15 @@ final class WebBox extends WidgetBox {
     void destroy() {
         if (disposed) return;
         cancelEvaluations("ERR_NSH_WEBVIEW_ABORTED", "The web view was disposed");
+        // Before the view is gone: stop every writer and report the
+        // teardown, since the core's cancels may not arrive first. The
+        // lease outlives the host, so those reports still reach this
+        // engine's cleanup sink; a running writer retires it when it stops.
+        synchronized (downloadLeaseLock) {
+            downloadsDisposed = true;
+        }
+        downloads.dispose();
+        releaseDownloadLease();
         disposed = true;
         evaluationHandler.removeCallbacksAndMessages(null);
         if (!processGone) {

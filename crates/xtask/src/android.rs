@@ -2,12 +2,13 @@
 //! `javac` + `d8` from the SDK. No Gradle.
 
 use std::{
-    env, fs,
+    env, fs, io,
     path::{Path, PathBuf},
     process::Command,
 };
 
 use anyhow::{Context as _, bail};
+use sha2::{Digest as _, Sha256};
 
 use crate::term;
 
@@ -21,6 +22,9 @@ pub(crate) const ABIS: [&str; 3] = ["arm64-v8a", "armeabi-v7a", "x86_64"];
 pub(crate) const MIN_SDK: u32 = 26;
 /// The SDK platform compiled against.
 pub(crate) const COMPILE_SDK: u32 = 35;
+/// The Java runtime's shape (sources, dependencies and what `classes.jar`
+/// holds): a cache from another shape is not reused.
+const JAVA_FORMAT: &str = "thin-aar+androidx-webkit-1.15.0";
 
 /// Locations of the Android SDK and NDK.
 pub(crate) struct Sdk {
@@ -153,9 +157,18 @@ pub(crate) fn build(release: bool, dev: bool, abis: &[String]) -> anyhow::Result
     // The directories too: removing a source changes its directory.
     let mut inputs = sources.clone();
     collect_dirs(&java_dir, &mut inputs)?;
+    let java_deps = dependencies(&root())?;
+    inputs.extend(java_deps.iter().map(|dependency| dependency.path.clone()));
+    let format = out.join("java.format");
+    if fs::read_to_string(&format).ok().as_deref() != Some(JAVA_FORMAT) {
+        // A runtime from another shape (a fat AAR's classes, other
+        // dependencies) is rebuilt, not reused.
+        let _ = fs::remove_file(out.join("classes.dex"));
+    }
     if !up_to_date(&out.join("classes.dex"), &inputs) || !out.join("classes.jar").exists() {
         let step = term::Step::start("compiling the Java runtime");
-        java(&sdk, &out, &sources)?;
+        java(&sdk, &out, &sources, &java_deps)?;
+        fs::write(&format, JAVA_FORMAT)?;
         step.done("compiled the Java runtime");
     }
     term::note(out.strip_prefix(root()).unwrap_or(&out).display());
@@ -344,13 +357,215 @@ fn up_to_date(file: &Path, sources: &[PathBuf]) -> bool {
         .all(|s| modified(s).is_some_and(|m| m <= built))
 }
 
+/// A Java dependency of the standalone runtime, fetched from its published
+/// repository and checked against a pinned SHA-256.
+///
+/// The runtime's `classes.dex` is NSH's own classes plus these real
+/// artifacts: `androidx.webkit` supplies `COOKIE_INTERCEPT` (1.15.0) for
+/// the request's own cookies in `shouldInterceptRequest`. The library AAR
+/// stays thin (its Gradle dependency is declared by the SDK's POM and
+/// example), so an embedding app resolves the same artifacts itself.
+struct Dependency {
+    /// The file the artifact is cached as.
+    file: &'static str,
+    /// The published artifact.
+    url: &'static str,
+    /// The artifact's SHA-256, refusing anything else.
+    sha256: &'static str,
+}
+
+/// `androidx.webkit:webkit:1.15.0` and its resolved runtime closure.
+///
+/// `annotation` is the Kotlin multiplatform module, whose JVM classes are in
+/// `annotation-jvm`; its POMs pull `kotlin-stdlib` (1.7.10) and
+/// `org.jetbrains:annotations`. `kotlin-stdlib-common` is metadata only and
+/// carries no classes. `androidx.core` is used by
+/// `WebViewFeatureInternal`'s WebView-version check, but the whole artifact
+/// is used (not hand-picked classes): its nested implementations and
+/// interfaces are easy to miss.
+const DEPENDENCIES: [Dependency; 12] = [
+    Dependency {
+        file: "webkit-1.15.0.aar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/webkit/webkit/1.15.0/webkit-1.15.0.aar",
+        sha256: "241c90aac937b6562592976da5cc73100538bf255000f490ed37296da1773960",
+    },
+    Dependency {
+        file: "annotation-jvm-1.8.1.jar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/annotation/annotation-jvm/1.8.1/annotation-jvm-1.8.1.jar",
+        sha256: "9aab326d9492800991854360ac248f493ce7f7c3183519309b78ace9e240f6f6",
+    },
+    Dependency {
+        file: "annotation-experimental-1.3.0.aar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/annotation/annotation-experimental/1.3.0/annotation-experimental-1.3.0.aar",
+        sha256: "abfd29c8556e5bd0325a9f769ab9e9d154ff4a5515c476cdd5a2a8285b1b19dc",
+    },
+    Dependency {
+        file: "jspecify-1.0.0.jar",
+        url: "https://repo1.maven.org/maven2/org/jspecify/jspecify/1.0.0/jspecify-1.0.0.jar",
+        sha256: "1fad6e6be7557781e4d33729d49ae1cdc8fdda6fe477bb0cc68ce351eafdfbab",
+    },
+    Dependency {
+        file: "core-1.1.0.aar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/core/core/1.1.0/core-1.1.0.aar",
+        sha256: "76c7cfbe596fe3c09a6983bf1c89e889299c08ac9a3b52ce5182a088d056647e",
+    },
+    // `androidx.core`'s own compile/runtime dependencies (the closure
+    // Gradle would resolve), so the standalone dex has no missing
+    // supertypes or interfaces.
+    Dependency {
+        file: "lifecycle-runtime-2.0.0.aar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-runtime/2.0.0/lifecycle-runtime-2.0.0.aar",
+        sha256: "e4afc9e636183f6f3e0edf1cf46121a492ffd2c673075bb07f55c7a99dd43cfb",
+    },
+    Dependency {
+        file: "lifecycle-common-2.0.0.jar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-common/2.0.0/lifecycle-common-2.0.0.jar",
+        sha256: "7bad7a188804adea6fa1f35d5ef99b705f20bd93ecadde484760ff86b535fefc",
+    },
+    Dependency {
+        file: "core-common-2.0.0.jar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/arch/core/core-common/2.0.0/core-common-2.0.0.jar",
+        sha256: "4b80b337779b526e64b0ee0ca9e0df43b808344d145f8e9b1c42a134dac57ad8",
+    },
+    Dependency {
+        file: "versionedparcelable-1.1.0.aar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/versionedparcelable/versionedparcelable/1.1.0/versionedparcelable-1.1.0.aar",
+        sha256: "9a1d77140ac222b7866b5054ee7d159bc1800987ed2d46dd6afdd145abb710c1",
+    },
+    Dependency {
+        file: "collection-1.0.0.jar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/collection/collection/1.0.0/collection-1.0.0.jar",
+        sha256: "9c8d117b5c2bc120a1cdfeb857e05b495b16c36013570372a708f7827e3ac9f9",
+    },
+    // The annotation artifacts are Kotlin: their POMs require the Kotlin
+    // standard library (and its `org.jetbrains:annotations`). Dexing them
+    // without it would leave annotation references unresolved.
+    Dependency {
+        file: "kotlin-stdlib-1.7.10.jar",
+        url: "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.7.10/kotlin-stdlib-1.7.10.jar",
+        sha256: "e771fe74250a943e8f6346713201ff1d8cb95c3a5d1a91a22b65a9e04f6a8901",
+    },
+    Dependency {
+        file: "annotations-13.0.jar",
+        url: "https://repo1.maven.org/maven2/org/jetbrains/annotations/13.0/annotations-13.0.jar",
+        sha256: "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+    },
+];
+
+/// A dependency's classes, ready for `javac` and for `d8`.
+struct DependencyJar {
+    path: PathBuf,
+}
+
+/// Downloads, verifies and unpacks [`DEPENDENCIES`] under `target/android/deps`.
+fn dependencies(root: &Path) -> anyhow::Result<Vec<DependencyJar>> {
+    let dir = root.join("target/android/deps");
+    fs::create_dir_all(&dir)?;
+    let mut jars = Vec::new();
+    for dependency in &DEPENDENCIES {
+        let artifact = fetch(dependency, &dir)?;
+        let path = if dependency.file.ends_with(".aar") {
+            let classes = dir.join(format!("{}.classes.jar", dependency.file));
+            if !up_to_date(&classes, std::slice::from_ref(&artifact)) {
+                extract_classes(&artifact, &classes)?;
+            }
+            classes
+        } else {
+            artifact
+        };
+        jars.push(DependencyJar { path });
+    }
+    Ok(jars)
+}
+
+/// `dependency`'s artifact in `dir`, downloaded when missing (or when the
+/// cached copy is not the pinned one).
+fn fetch(dependency: &Dependency, dir: &Path) -> anyhow::Result<PathBuf> {
+    let path = dir.join(dependency.file);
+    if path.exists() && sha256(&path)? == dependency.sha256 {
+        return Ok(path);
+    }
+    let part = dir.join(format!("{}.part", dependency.file));
+    let output = Command::new("curl")
+        .args(["-fsSL", "--retry", "3", "--connect-timeout", "30", "-o"])
+        .arg(&part)
+        .arg(dependency.url)
+        .output()
+        .context("run curl")?;
+    if !output.status.success() {
+        let _ = fs::remove_file(&part);
+        bail!(
+            "download {}: {}",
+            dependency.url,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let hash = sha256(&part)?;
+    if hash != dependency.sha256 {
+        let _ = fs::remove_file(&part);
+        bail!(
+            "{} has SHA-256 {hash}, not {}: refusing to build with it",
+            dependency.url,
+            dependency.sha256
+        );
+    }
+    fs::rename(&part, &path)?;
+    Ok(path)
+}
+
+/// The SHA-256 of `path`, in lower-case hexadecimal.
+fn sha256(path: &Path) -> anyhow::Result<String> {
+    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = io::Read::read(&mut file, &mut buffer)
+            .with_context(|| format!("read {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let mut hex = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        use std::fmt::Write as _;
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    Ok(hex)
+}
+
+/// `aar`'s `classes.jar`, beside it.
+fn extract_classes(aar: &Path, to: &Path) -> anyhow::Result<()> {
+    let file = fs::File::open(aar).with_context(|| format!("open {}", aar.display()))?;
+    let mut archive =
+        zip::ZipArchive::new(file).with_context(|| format!("read {}", aar.display()))?;
+    let mut entry = archive
+        .by_name("classes.jar")
+        .with_context(|| format!("{} has no classes.jar", aar.display()))?;
+    let mut out = fs::File::create(to).with_context(|| format!("create {}", to.display()))?;
+    io::copy(&mut entry, &mut out)?;
+    Ok(())
+}
+
 /// Compiles the Java runtime (`sources`) to `out/classes.dex`.
-fn java(sdk: &Sdk, out: &Path, sources: &[PathBuf]) -> anyhow::Result<()> {
+fn java(
+    sdk: &Sdk,
+    out: &Path,
+    sources: &[PathBuf],
+    dependencies: &[DependencyJar],
+) -> anyhow::Result<()> {
     let classes = out.join("classes");
     if classes.exists() {
         fs::remove_dir_all(&classes)?;
     }
     fs::create_dir_all(&classes)?;
+    let mut classpath = vec![sdk.android_jar()];
+    classpath.extend(
+        dependencies
+            .iter()
+            .map(|dependency| dependency.path.clone()),
+    );
+    let classpath = env::join_paths(&classpath).context("join the Java classpath")?;
     // Java 17 bytecode: d8 desugars it for every supported API level.
     term::run(
         jdk("javac")
@@ -362,7 +577,7 @@ fn java(sdk: &Sdk, out: &Path, sources: &[PathBuf]) -> anyhow::Result<()> {
                 "UTF-8",
                 "-classpath",
             ])
-            .arg(sdk.android_jar())
+            .arg(classpath)
             .arg("-d")
             .arg(&classes)
             .args(sources),
@@ -384,11 +599,20 @@ fn java(sdk: &Sdk, out: &Path, sources: &[PathBuf]) -> anyhow::Result<()> {
         sdk.build_tools
             .join(if cfg!(windows) { "d8.bat" } else { "d8" }),
     );
+    // The library AAR stays thin (NSH's classes only): an embedding app
+    // gets the dependencies from Gradle, declared by the SDK's POM. The
+    // standalone runtime has no Gradle, so its dex is NSH's classes and the
+    // real artifacts together. An AAR's `classes.jar` refers to its
+    // generated `R` class, which Gradle makes and d8 here reports as a
+    // missing class for code paths this runtime never loads.
     d8.args(["--min-api", &MIN_SDK.to_string(), "--lib"])
         .arg(sdk.android_jar())
         .arg("--output")
         .arg(out)
         .arg(&jar);
+    for dependency in dependencies {
+        d8.arg(&dependency.path);
+    }
     // `d8.bat` runs the `java` it finds on the PATH: the JDK's bin first.
     if let Some(home) = env::var_os("JAVA_HOME").map(PathBuf::from) {
         let mut paths = vec![home.join("bin")];

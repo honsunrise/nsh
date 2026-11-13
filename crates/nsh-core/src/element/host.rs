@@ -1644,10 +1644,11 @@ impl WebView {
         )
     }
 
-    /// A download started, finished or failed (the platform's existing
-    /// `onDownload` lifecycle). Registering it makes automatic downloads
-    /// write into the app's data directory (`downloads/<id>/<filename>`),
-    /// unless [`on_download_pending`](Self::on_download_pending) is also
+    /// A download started, finished, failed, was cancelled or was delegated
+    /// (the core's `onDownload` lifecycle). Registering it makes automatic
+    /// downloads write into the app's data directory
+    /// (`downloads/<id>/<filename>`), unless
+    /// [`on_download_pending`](Self::on_download_pending) is also
     /// registered, which makes every destination the app's.
     pub fn on_download<M>(
         self,
@@ -1658,17 +1659,17 @@ impl WebView {
             listener.into_listener(),
             events::web_download,
         )
+        .set(Prop::Native(NativeProp::DeferDownloads(true)))
     }
 
     /// The page asked to download a file and waits for the app's
     /// destination. Registering this listener is what asks for that: the
-    /// platform writes nothing until the app answers
-    /// ([`WebDownloadPending::accept`](crate::webview::WebDownloadPending::accept)
-    /// or [`cancel`](crate::webview::WebDownloadPending::cancel)), and a
+    /// platform holds the transfer and writes nothing until the app answers
+    /// ([`WebDownloadControl::accept`](crate::webview::WebDownloadControl::accept),
+    /// [`cancel`](crate::webview::WebDownloadControl::cancel) or
+    /// [`delegate`](crate::webview::WebDownloadControl::delegate)), and a
     /// download the app never answers is cancelled after a bounded wait.
     /// Without this listener the platform keeps its automatic behavior.
-    /// Only desktops report pending downloads; elsewhere a download never
-    /// bypasses this choice.
     pub fn on_download_pending<M>(
         self,
         listener: impl IntoListener<crate::webview::WebDownloadPending, M>,
@@ -1679,6 +1680,31 @@ impl WebView {
             events::web_download_pending,
         )
         .set(Prop::Native(NativeProp::DeferDownloads(true)))
+    }
+}
+
+/// What only Android's system WebView needs to be told
+/// ([`crate::webview::downloads`]).
+///
+/// Android's system WebView discards a download's response before its
+/// `DownloadListener` fires, so NSH can own the bytes only by making the
+/// request itself — and only where the app declares it. Elsewhere the
+/// extension does nothing: the other engines hand NSH the live transfer,
+/// or the browser downloads the file on its own.
+pub trait WebViewAndroidExt: Element {
+    /// URL patterns whose `GET` requests NSH issues itself and holds for
+    /// the app's decision ([`crate::webview::WebDownloadSource::Request`]);
+    /// `"https://files.example.com/*"`. The whole URL is matched, `*`
+    /// matches any run of characters, and matching is case-sensitive.
+    /// Outside them the engine requests as usual.
+    fn download_scope(self, patterns: impl IntoReactive<Vec<String>>) -> Self;
+}
+
+impl WebViewAndroidExt for WebView {
+    fn download_scope(self, patterns: impl IntoReactive<Vec<String>>) -> Self {
+        self.bind_prop(patterns, |patterns: Vec<String>| {
+            Prop::Native(NativeProp::DownloadScope(patterns))
+        })
     }
 }
 

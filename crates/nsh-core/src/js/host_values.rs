@@ -913,6 +913,30 @@ pub(crate) fn keyboard_taps<I: HostInput>(input: &I, _: &mut HostCx) -> Option<S
     }))
 }
 
+/// Android's `downloads` object of a web view: `{ scope?: string[] }`.
+pub(crate) fn android_downloads<I: HostInput>(
+    input: &I,
+    cx: &mut HostCx,
+) -> Option<crate::NativeProp> {
+    if input.is_nullish() {
+        return Some(crate::NativeProp::DownloadScope(Vec::new()));
+    }
+    if !input.is_object() {
+        cx.warn("android downloads: an object, `{ scope: string[] }`");
+        return None;
+    }
+    let mut patterns = Vec::new();
+    if let Some(scope) = input.field("scope") {
+        for item in scope.items() {
+            match item.as_string() {
+                Some(pattern) => patterns.push(pattern),
+                None => cx.warn("android downloads.scope: URL patterns are strings"),
+            }
+        }
+    }
+    Some(crate::NativeProp::DownloadScope(patterns))
+}
+
 /// A dialog's `supportedOrientations`: the orientation names.
 pub(crate) fn orientations<I: HostInput>(input: &I, _: &mut HostCx) -> Option<ModalProp> {
     Some(ModalProp::Orientations(orientation_bits(input)))

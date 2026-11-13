@@ -598,6 +598,48 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                             e.string(value);
                         }
                     }
+                    // `WebBox.download`: the operation, the core's request id,
+                    // the download's id, and a start's staging path.
+                    Command::WebViewRequest(request) => {
+                        use nsh_core::webview::WebViewOperation;
+                        e.int(53);
+                        match &request.operation {
+                            WebViewOperation::StartDownload { id, staging } => {
+                                // A path Java cannot name is a start it must
+                                // refuse: answer it rather than write elsewhere.
+                                match staging.to_str() {
+                                    Some(path) => {
+                                        e.int(0);
+                                        e.int(request.id as i32);
+                                        e.string(id.clone());
+                                        e.string(path.to_owned());
+                                    }
+                                    None => {
+                                        e.int(3);
+                                        e.int(request.id as i32);
+                                        e.string(String::new());
+                                    }
+                                }
+                            }
+                            WebViewOperation::CancelDownload { id } => {
+                                e.int(1);
+                                e.int(request.id as i32);
+                                e.string(id.clone());
+                            }
+                            WebViewOperation::DelegateDownload { id } => {
+                                e.int(2);
+                                e.int(request.id as i32);
+                                e.string(id.clone());
+                            }
+                            // Nothing else has an Android mechanism: answer
+                            // it, or the core would wait for a reply.
+                            _ => {
+                                e.int(3);
+                                e.int(request.id as i32);
+                                e.string(String::new());
+                            }
+                        }
+                    }
                     Command::Seek(seconds) => {
                         e.int(10);
                         e.float(seconds as f32);
@@ -782,9 +824,6 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                     // the core rejects the calls first.
                     | Command::HostCall { .. }
                     | Command::HostPost { .. }
-                    // No desktop web view controls (`Environment::webview_requests`):
-                    // the core answers these first.
-                    | Command::WebViewRequest(_)
                     // No eyedropper (`Environment::screen_color`): the core
                     // answers no color first.
                     | Command::PickScreenColor { .. } => e.int(-1),
@@ -1300,6 +1339,19 @@ fn native_props(e: &mut Encoded, p: &NativeProps) {
             e.bool(w.scrollable);
             e.bool(w.javascript_enabled);
             e.bool(w.incognito);
+            // Downloads: whether to hold them, and the URLs NSH requests
+            // itself (`download_scope`, a JSON array of glob patterns).
+            e.bool(w.defer_downloads);
+            e.string(
+                nsh_core::JsonValue::Array(
+                    w.download_scope
+                        .iter()
+                        .cloned()
+                        .map(nsh_core::JsonValue::String)
+                        .collect(),
+                )
+                .to_string(),
+            );
         }
         NativeProps::Video(v) => {
             e.int(4);

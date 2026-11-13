@@ -94,8 +94,11 @@ AAR 包含 Java 运行时以及适用于 `arm64-v8a`、`armeabi-v7a` 和 `x86_64
 dependencies {
     debugImplementation(files("libs/nsh-dev.aar"))
     releaseImplementation(files("libs/nsh.aar"))
+    implementation("androidx.webkit:webkit:1.15.0")
 }
 ```
+
+从 `google()` 和 `mavenCentral()` 解析 AndroidX。AAR 包含 NSH 自身的类，Gradle 将 AndroidX WebKit 及其依赖与宿主应用的依赖一起解析。使用 compileSdk 33 或更高版本，以及 Android Gradle Plugin 7.2 或更高版本。`nsh package` 构建的独立 APK 会自动包含这些运行时依赖。
 
 ## 随应用附带 bundle
 

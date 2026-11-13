@@ -200,6 +200,7 @@ pub use crate::element::{
     VirtualList,
     WebNavigation,
     WebView,
+    WebViewAndroidExt,
     WheelDelta,
     WheelEvent,
     WritingDirection,
@@ -280,6 +281,8 @@ pub use crate::element::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::element::{background, blocking};
+/// Download controls ([`crate::webview`]): `accept`, `cancel`, `delegate`.
+pub use crate::webview::WebDownloadControl;
 /// Translations ([`crate::i18n`]).
 pub use crate::{
     i18n::{available_locales, set_locale},

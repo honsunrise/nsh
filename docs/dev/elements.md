@@ -60,39 +60,52 @@ of what is in scope: a host element's primitive is imported from its home (`impo
 in place, a component is imported (`import { Chart } from "app/native"`) or local; lowercase tags are errors
 (`native-pipeline.md`).
 
-## Desktop WebView downloads
+## WebView downloads
 
-`nsh_core::webview` defines the download decision protocol. A Rust host registers `WebView::on_download_pending`;
-that registration alone opts into manual destinations, so there is no separate behavior prop. The platform emits
-`DownloadPending` with the download's `id`, `url` and `filename`; the core's typed listener wraps it in
-`WebDownloadPending`, whose private handle binds the original web view's node, executor and download id. The app
-calls `accept(impl Into<DownloadDestination>)` or `cancel()` and awaits `Answer<Result<(), String>>`: it settles
-the decision, not the transfer. Clones share the decision; a handle cannot be forged for another view or download.
+`nsh_core::webview::downloads` owns download sessions, exposed through `nsh_core::webview`. A Rust host registers
+`WebView::on_download_pending` for manual decisions, or `on_download` alone for automatic app-data downloads.
+Without either listener the platform retains its normal behavior. There is no separate public behavior prop.
+`WebDownloadControl` is the common decision trait: `accept(impl Into<DownloadDestination>)`, `cancel()` and
+`delegate()` return `Answer<Result<(), String>>`. The private handle binds the original executor, node and
+download identity; public metadata, clones and unbound defaults cannot retarget it.
 
-The core assigns a request id, keeps its target node and answer, and sends `Command::WebViewRequest` with the mount
-batch. The platform answers with `WebViewReply` on that node. Only a matching pending request is settled; replies
-from another node, duplicates and late replies are dropped, and unmount, unsupported hosts and `REPLY_TIMEOUT`
-settle with an error.
+Backends offer a held transfer with internal `DownloadOffer` metadata, report `DownloadProgress`, and report
+`DownloadEnd` after their writer stops. They receive `StartDownload { id, staging }`, `CancelDownload { id }`
+and `DelegateDownload { id }` through `Command::WebViewRequest`. `WebViewReply` acknowledges that command; its
+request id is separate from the download id. Backends hold native objects and streams; the common coordinator
+decides app-facing `DownloadPending` and `Download` events, destinations, publication and terminal outcomes.
 
-A `DownloadDestination` is absolute, names a file, and its parent must exist. A `PathBuf` refuses an existing file;
-`DownloadDestination::default().path(..).overwrite(true)` replaces one. Platforms write an owned staging file beside
-the destination and publish atomically only on completion: failure, cancellation and teardown remove only that
-output, never the app's existing or completed file. Native deferrals are bounded; a pending decision the app never
-answers is cancelled. An unknown, duplicate or already-finished decision errors without touching another download.
+`source` records where the bytes come from: `Transfer` is a held browser response, `Request` a request NSH owns,
+`None` metadata after the engine released the response, and `Page` the reserved page-data source. Optional
+`method`, `mime_type` and expected `bytes` are observations, not guesses. In particular, a URL-to-method cache
+cannot correlate concurrent requests or redirected POSTs to Android's `DownloadListener`. `can_delegate` is true
+only when the adapter can honor an explicit handover for that download. `Delegated` records transfer of ownership,
+not successful file delivery; NSH does not silently re-request a released response.
 
-The handler registration alone sets the internal `WebProps::defer_downloads` flag (Rust-only, hidden, reset when the
-handler goes). On a platform where `Environment::webview_requests` is false, that request cannot be honored: the
-core mounts an inert empty document with JavaScript, injected scripts, source/base URL and back/forward gestures
-disabled, reports `onError`, and refuses app-driven `load`, `reload`, back, forward, `injectJavaScript` and
-`Evaluate` (the evaluation answer settles with an error). Removing the handler resets the flag and restores the
-app's page and automatic downloads. No public behavior enum or config exists for this.
+The start acknowledgement settles acceptance, while `Finished` is emitted only after successful publication.
+`Cancelled` carries `CancelReason::{App, Timeout, Teardown, NoListener}`; network and file failures remain
+`Failed`. A 60-second offer deadline bounds unanswered manual decisions. The separate 30-second reply deadline
+bounds waiting for a command acknowledgement; a missing acknowledgement does not prove that a writer stopped.
+The cancellation path therefore retains cleanup ownership until stopping is established, including callbacks
+arriving after the UI node is released. A completed destination is never removed by a late cancellation.
+Removing the last download listener cancels in-flight sessions with `NoListener` while keeping the WebView mounted.
+The commit's final event mask decides this: removing and readding a listener within one turn does not cancel it.
 
-Without an `onDownloadPending` listener the platform keeps its automatic behavior: an `onDownload` listener saves
-into `<data dir>/<app id>/downloads/<id>/<sanitized filename>` (macOS, Windows and Linux). Every platform removes
-path separators, control characters, bidi controls and leading dots, and caps names at 200 bytes; Windows also
-refuses reserved device names (including `CONIN$`/`CONOUT$`, `COM`/`LPT` 0-9 and superscripts) and trailing dots or
-spaces. Downloads are Rust-only; TSX keeps the existing `onDownload` lifecycle and gains no path-writing API.
-Host authority stays with the app: it chooses the path, and capabilities continue to govern which pages load.
+`DownloadDestination` is an absolute file path with an existing parent; overwrite is opt-in. The core allocates an
+owned private sibling staging directory with a nonexistent leaf, accommodating engines that create their output
+themselves. Filesystem work runs outside the engine's UI/JS turn. Publication without overwrite must preserve a
+destination created in the meantime; replacement happens only on successful completion. Cleanup touches only owned
+staging after the producer stops. Expected size checks use the representation written to the file: an encoded
+HTTP Content-Length cannot be compared to decoded output without accounting for that difference.
+Linux and Android use `renameat2(RENAME_NOREPLACE)` for atomic no-overwrite publication, with an atomic hard-link
+fallback only when that operation is unavailable. They never replace this with an existence check followed by an
+overwrite-capable rename. Android app storage can reject hard links even when the staged file is writable.
+
+Automatic output remains under the app's `downloads/<id>/<sanitized filename>`. Pending decisions and arbitrary
+host destinations stay Rust-only; TSX observes `onDownload` with the widened source, terminal state and diagnostics.
+The Android `WebViewAndroidExt::download_scope` builder configures only its request-ownership mechanism; shared
+decisions, lifecycle and file rules stay in the common API. Browser and native adapter capabilities must be
+documented as observed, rather than inferred from shared method signatures.
 
 ## The main thread never waits for JS
 

@@ -511,14 +511,18 @@ pub(crate) const WEBVIEW_EXPORTS: &[Item] = &[(
 /// `WebView`'s types.
 pub(crate) const WEBVIEW_TYPES: &str = r#"export type { WebViewNavigation };
 
-export interface WebViewProps extends Omit<ViewProps, "children" | "ios" | "desktop" | "ref">, WebViewHostProps {
+export interface WebViewProps extends Omit<ViewProps, "children" | "ios" | "android" | "desktop" | "ref">, WebViewHostProps {
   ref?: WebViewRef | ((node: WebViewRef) => void);
   ios?: IOSWebViewProps;
+  android?: AndroidWebViewProps;
   desktop?: DesktopWebViewProps;
 }
 
 /** A web view's iOS-only props: every element's and its own. */
 export interface IOSWebViewProps extends IOSProps, IOSWebViewHostProps {}
+
+/** A web view's Android-only props: every element's and its own. */
+export interface AndroidWebViewProps extends AndroidProps, AndroidWebViewHostProps {}
 
 /** A web view's desktop-only props: every element's and its own. */
 export interface DesktopWebViewProps extends DesktopProps, DesktopWebViewHostProps {}
