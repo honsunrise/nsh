@@ -17,7 +17,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -28,8 +27,18 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
+import okhttp3.Authenticator;
+import okhttp3.Call;
+import okhttp3.CookieJar;
+import okhttp3.Headers;
+import okhttp3.Interceptor;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 
 /**
  * Web view downloads on Android's system WebView, as a transport only (the
@@ -47,11 +56,23 @@ import java.util.zip.GZIPInputStream;
  * replaces it for the page with an empty {@code 204}. The bytes are never
  * requested twice.
  *
+ * <p>The transport is OkHttp, not {@code HttpURLConnection}: the client has
+ * no cookie jar, no authenticator (origin or proxy) and no redirect
+ * following, and a network interceptor refuses a second exchange for one
+ * hop. Ambient process state — a default {@code CookieHandler}, a default
+ * {@code java.net.Authenticator}, or an HTTP cache — has no path into the
+ * request. OkHttp's own follow-ups are refused the same way: its 503
+ * {@code Retry-After: 0} and 421 retries are not governed by
+ * {@code retryOnConnectionFailure}, so the attempt tag is what makes "one
+ * exchange per hop" true, including for a reset or a stale pooled
+ * connection.
+ *
  * <p>Cookies stay the WebView's own. The request carries exactly the {@code
  * Cookie} header the browser would send, from the bundled AndroidX WebKit's
  * {@code COOKIE_INTERCEPT} feature (SameSite and partitioned cookies
- * included); neither {@code CookieManager.getCookie} nor a hand-built jar
- * stands in for it.
+ * included), and only that header — an empty one stays empty; neither
+ * {@code CookieManager.getCookie}, a hand-built jar, nor the process
+ * {@code CookieHandler} stands in for it.
  *
  * <p>A redirect is followed only where its cookie context is provably the
  * same: the same origin, no {@code Set-Cookie} on the redirect response,
@@ -90,6 +111,56 @@ final class WebDownloads {
     private static final long PROGRESS_MILLIS = 500;
     /** The most redirects one held request follows. */
     private static final int MAX_REDIRECTS = 10;
+    /** How long a hop may take to connect, and to produce each response byte. */
+    private static final int CONNECT_TIMEOUT_MILLIS = 30_000;
+    private static final int READ_TIMEOUT_MILLIS = 30_000;
+    /** How long a hop's response head may take, across connect and redirects. */
+    private static final long HEAD_DEADLINE_NANOS = 60_000_000_000L;
+    /** The copy may legitimately wait long between body bytes. */
+    private static final int COPY_READ_TIMEOUT_MILLIS = 120_000;
+
+    /**
+     * One hop's single permitted network exchange. OkHttp follows up on its
+     * own for a 503 with {@code Retry-After: 0} and for a coalesced 421,
+     * neither of which {@code retryOnConnectionFailure} governs, so the
+     * attempt is tagged and a network interceptor refuses its second send.
+     */
+    private static final class Exchange {
+        private final AtomicBoolean sent = new AtomicBoolean();
+
+        boolean claim() {
+            return sent.compareAndSet(false, true);
+        }
+    }
+
+    private static final Interceptor ONE_EXCHANGE = chain -> {
+        Exchange exchange = chain.request().tag(Exchange.class);
+        if (exchange == null || !exchange.claim()) {
+            throw new IOException("a request hop was sent more than once");
+        }
+        return chain.proceed(chain.request());
+    };
+
+    /**
+     * The client every held request uses. No cookie jar, no authenticator
+     * and no cache: process-wide {@code CookieHandler},
+     * {@code java.net.Authenticator} and HTTP cache state have no path into
+     * a request, whose only cookies are its own {@code Cookie} header.
+     * Redirects are followed by the explicit loop, and a hop cannot be sent
+     * again — by OkHttp's retries and follow-ups or by a reset.
+     */
+    private static final OkHttpClient CLIENT = new OkHttpClient.Builder()
+            .cookieJar(CookieJar.NO_COOKIES)
+            .authenticator(Authenticator.NONE)
+            .proxyAuthenticator(Authenticator.NONE)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .connectTimeout(CONNECT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            .readTimeout(READ_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            .writeTimeout(READ_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            .addNetworkInterceptor(ONE_EXCHANGE)
+            .build();
 
     /** A download the view holds: what the core's offer is made of. */
     static final class Offer {
@@ -151,7 +222,8 @@ final class WebDownloads {
     /** One held response: the native object, and the writer while one runs. */
     private static final class Held {
         final Offer offer;
-        final HttpURLConnection connection;
+        final Call call;
+        final Response response;
         final InputStream stream;
 
         // Under `this`.
@@ -160,9 +232,10 @@ final class WebDownloads {
         int cancelRequest = -1;
         boolean startAnswered, cancelAnswered;
 
-        Held(Offer offer, HttpURLConnection connection, InputStream stream) {
+        Held(Offer offer, Call call, Response response, InputStream stream) {
             this.offer = offer;
-            this.connection = connection;
+            this.call = call;
+            this.response = response;
             this.stream = stream;
         }
     }
@@ -279,21 +352,25 @@ final class WebDownloads {
         String current = url;
         // A scoped request blocks a WebView network thread until its head is
         // here: neither redirects nor a slow server may hold it for long.
-        long deadline = System.nanoTime() + 60_000_000_000L;
+        long deadline = System.nanoTime() + HEAD_DEADLINE_NANOS;
         for (int hop = 0; ; hop++) {
             if (System.nanoTime() > deadline) {
                 throw new IOException("no response head within 60 s");
             }
-            HttpURLConnection connection = open(current, headers, cookie);
+            Request hopRequest = request(current, headers, cookie, new Exchange());
+            Call call = CLIENT.newCall(hopRequest);
+            Response response = null;
             try {
-                int status = connection.getResponseCode();
-                Map<String, String> response = responseHeaders(connection);
+                response = call.execute();
+                int status = response.code();
+                Map<String, String> fields = responseHeaders(response);
                 if (isRedirect(status)) {
-                    String location = header(response, "Location");
+                    String location = header(fields, "Location");
                     String next = location == null ? null
                             : new URL(new URL(current), location).toString();
-                    List<String> cookiesSet = responseCookies(connection);
-                    connection.disconnect();
+                    List<String> cookiesSet = responseCookies(response);
+                    response.close();
+                    response = null;
                     if (next == null || hop >= MAX_REDIRECTS) {
                         throw new IOException("a redirect without a usable Location, or too many");
                     }
@@ -320,15 +397,25 @@ final class WebDownloads {
                     current = next;
                     continue;
                 }
-                return respond(connection, current, url, status, response);
+                return respond(call, response, current, url, status, fields);
             } catch (IOException | RuntimeException error) {
-                connection.disconnect();
+                if (response != null) {
+                    // The head arrived but respond() refused it: release the
+                    // held body rather than leak the connection.
+                    try {
+                        response.close();
+                    } catch (Throwable ignored) {
+                        // Already closed, or the connection went away.
+                    }
+                } else {
+                    call.cancel();
+                }
                 throw error;
             }
         }
     }
 
-    private WebResourceResponse respond(HttpURLConnection connection, String url, String requested,
+    private WebResourceResponse respond(Call call, Response response, String url, String requested,
             int status, Map<String, String> headers) throws IOException {
         String encoding = header(headers, "Content-Encoding");
         boolean gzip = encoding != null
@@ -344,17 +431,11 @@ final class WebDownloads {
             pageHeaders.remove(caseInsensitiveKey(pageHeaders, "Content-Encoding"));
             pageHeaders.remove(caseInsensitiveKey(pageHeaders, "Content-Length"));
         }
-        List<String> cookies = responseCookies(connection);
+        List<String> cookies = responseCookies(response);
         String mime = header(headers, "Content-Type");
         String disposition = header(headers, "Content-Disposition");
         boolean attachment = status == 200 && isAttachment(disposition);
-        InputStream body;
-        if (status == 204 || status == 205 || status == 304) {
-            body = new ByteArrayInputStream(new byte[0]);
-        } else {
-            body = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
-            if (body == null) body = new ByteArrayInputStream(new byte[0]);
-        }
+        InputStream body = response.body().byteStream();
         if (gzip) {
             // Served and held decoded, as the browser would render it.
             body = new GZIPInputStream(body);
@@ -373,7 +454,7 @@ final class WebDownloads {
             // No declared size is claimed: a decoded body's length is not
             // the header's, and the end reports the bytes actually written.
             Offer offer = new Offer(id, url, filename, type, -1, "GET", "request", true);
-            Held download = new Held(offer, connection, body);
+            Held download = new Held(offer, call, response, body);
             synchronized (admission) {
                 if (closed) {
                     // Tearing down: no new Held may appear after the pass
@@ -385,20 +466,20 @@ final class WebDownloads {
                 lifecycle.retained();
             }
             sink.offer(offer);
-            WebResourceResponseCompat response = new WebResourceResponseCompat("text/plain",
+            WebResourceResponseCompat offered = new WebResourceResponseCompat("text/plain",
                     "utf-8", 204, "No Content", new HashMap<>(),
                     new ByteArrayInputStream(new byte[0]));
-            if (!cookies.isEmpty()) response.setCookies(cookies);
-            return response.toWebResourceResponse();
+            if (!cookies.isEmpty()) offered.setCookies(cookies);
+            return offered.toWebResourceResponse();
         }
         String type = mimeType(mime);
-        String reason = connection.getResponseMessage();
+        String reason = response.message();
         if (reason == null || reason.trim().isEmpty()) reason = "HTTP " + status;
-        WebResourceResponseCompat response = new WebResourceResponseCompat(
+        WebResourceResponseCompat served = new WebResourceResponseCompat(
                 type == null ? "application/octet-stream" : type, charset(mime), status, reason,
-                responseHeadersForPage(pageHeaders), closing(body, connection));
-        if (!cookies.isEmpty()) response.setCookies(cookies);
-        return response.toWebResourceResponse();
+                responseHeadersForPage(pageHeaders), closing(body, response));
+        if (!cookies.isEmpty()) served.setCookies(cookies);
+        return served.toWebResourceResponse();
     }
 
     /**
@@ -429,28 +510,27 @@ final class WebDownloads {
                 new HashMap<>(), new ByteArrayInputStream(new byte[0]));
     }
 
-    private static HttpURLConnection open(String url, Map<String, String> headers, String cookie)
-            throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-        // Followed here: a replayed redirect through the WebView would be a
-        // second request with effects of its own.
-        connection.setInstanceFollowRedirects(false);
-        connection.setRequestMethod("GET");
-        connection.setUseCaches(false);
+    /**
+     * One hop's request. The attempt tag is what the network interceptor
+     * refuses to see twice; the WebView's own headers are kept, with the
+     * hop-by-hop fields already dropped by the caller.
+     */
+    private static Request request(String url, Map<String, String> headers, String cookie,
+            Exchange exchange) {
+        Request.Builder builder = new Request.Builder().url(url).get();
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            builder.header(header.getKey(), header.getValue());
+        }
+        // The WebView's exact header for this request, before any redirect:
+        // the same origin keeps the browser's request context. An empty
+        // header is sent as the empty header it was, never dropped.
+        if (cookie != null) builder.header("Cookie", cookie);
         // No content encoding: the bytes this response describes are the
         // bytes the file will receive (and no decoding can shorten them
         // behind the length's back).
-        connection.setRequestProperty("Accept-Encoding", "identity");
-        connection.setConnectTimeout(30_000);
-        // Headers only: the copy raises it for the body.
-        connection.setReadTimeout(30_000);
-        for (Map.Entry<String, String> header : headers.entrySet()) {
-            connection.setRequestProperty(header.getKey(), header.getValue());
-        }
-        // The WebView's exact header for this request, before any redirect:
-        // the same origin keeps the browser's request context.
-        if (cookie != null) connection.setRequestProperty("Cookie", cookie);
-        return connection;
+        builder.header("Accept-Encoding", "identity");
+        builder.tag(Exchange.class, exchange);
+        return builder.build();
     }
 
     // --- Commands ------------------------------------------------------------
@@ -600,8 +680,10 @@ final class WebDownloads {
                 return;
             }
             // The copy may legitimately take long between bytes; the
-            // header wait above is what must stay short.
-            download.connection.setReadTimeout(120_000);
+            // header wait above is what must stay short. OkHttp's body
+            // source forwards to the socket's read timeout.
+            download.response.body().source().timeout()
+                    .timeout(COPY_READ_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
             out = new FileOutputStream(new File(staging));
             opened = true;
             // The worker started: the core may publish only once the end
@@ -724,18 +806,23 @@ final class WebDownloads {
         } catch (Throwable ignored) {
             // Already closed, or the connection went away.
         }
-        download.connection.disconnect();
+        try {
+            download.response.close();
+        } catch (Throwable ignored) {
+            // Closing the body twice is harmless.
+        }
+        download.call.cancel();
     }
 
-    /** Gives the page the body, and the connection back when it is done. */
-    private static InputStream closing(InputStream body, HttpURLConnection connection) {
+    /** Gives the page the body, and the response back when it is done. */
+    private static InputStream closing(InputStream body, Response response) {
         return new java.io.FilterInputStream(body) {
             @Override
             public void close() throws IOException {
                 try {
                     super.close();
                 } finally {
-                    connection.disconnect();
+                    response.close();
                 }
             }
         };
@@ -782,11 +869,12 @@ final class WebDownloads {
         }
     }
 
-    private static Map<String, String> responseHeaders(HttpURLConnection connection) {
+    private static Map<String, String> responseHeaders(Response response) {
         Map<String, String> headers = new LinkedHashMap<>();
-        for (Map.Entry<String, List<String>> field : connection.getHeaderFields().entrySet()) {
-            if (field.getKey() == null || field.getValue().isEmpty()) continue; // the status line
-            if (!headers.containsKey(field.getKey())) headers.put(field.getKey(), field.getValue().get(0));
+        Headers source = response.headers();
+        for (int i = 0; i < source.size(); i++) {
+            String name = source.name(i);
+            if (!headers.containsKey(name)) headers.put(name, source.value(i));
         }
         return headers;
     }
@@ -809,12 +897,11 @@ final class WebDownloads {
         return page;
     }
 
-    private static List<String> responseCookies(HttpURLConnection connection) {
+    private static List<String> responseCookies(Response response) {
         List<String> cookies = new ArrayList<>();
-        for (Map.Entry<String, List<String>> field : connection.getHeaderFields().entrySet()) {
-            if (field.getKey() != null && "Set-Cookie".equalsIgnoreCase(field.getKey())) {
-                cookies.addAll(field.getValue());
-            }
+        Headers headers = response.headers();
+        for (int i = 0; i < headers.size(); i++) {
+            if ("Set-Cookie".equalsIgnoreCase(headers.name(i))) cookies.add(headers.value(i));
         }
         return cookies;
     }

@@ -5,9 +5,10 @@ its own native views.
 
 1. Add `dist/nsh/embed/android/nsh.aar` (or `nsh-dev.aar` for development
    builds) to the app, e.g. in Gradle: `implementation(files("libs/nsh.aar"))`,
-   alongside `implementation("androidx.webkit:webkit:1.15.0")` with `google()`
-   and `mavenCentral()` repositories. The AAR contains NSH's classes; Gradle resolves
-   AndroidX alongside the host app's dependencies. Use compileSdk 33+ and Android Gradle Plugin 7.2+.
+   alongside `implementation("androidx.webkit:webkit:1.15.0")` and
+   `implementation("com.squareup.okhttp3:okhttp:5.3.2")`, with `google()` and `mavenCentral()` repositories.
+   The AAR contains NSH's classes; Gradle resolves AndroidX and OkHttp alongside the host app's dependencies.
+   Use compileSdk 33+ and Android Gradle Plugin 7.2+.
 2. Build the NSH bundle into the app's assets:
    `nsh build ../embedded --release --out app/src/main/assets/nsh`.
 3. Create a `com.longbridge.nsh.NshView`, add it to a layout and call

@@ -24,7 +24,7 @@ pub(crate) const MIN_SDK: u32 = 26;
 pub(crate) const COMPILE_SDK: u32 = 35;
 /// The Java runtime's shape (sources, dependencies and what `classes.jar`
 /// holds): a cache from another shape is not reused.
-const JAVA_FORMAT: &str = "thin-aar+androidx-webkit-1.15.0";
+const JAVA_FORMAT: &str = "thin-aar+androidx-webkit-1.15.0+okhttp-5.3.2";
 
 /// Locations of the Android SDK and NDK.
 pub(crate) struct Sdk {
@@ -362,8 +362,9 @@ fn up_to_date(file: &Path, sources: &[PathBuf]) -> bool {
 ///
 /// The runtime's `classes.dex` is NSH's own classes plus these real
 /// artifacts: `androidx.webkit` supplies `COOKIE_INTERCEPT` (1.15.0) for
-/// the request's own cookies in `shouldInterceptRequest`. The library AAR
-/// stays thin (its Gradle dependency is declared by the SDK's POM and
+/// the request's own cookies in `shouldInterceptRequest`, and OkHttp's
+/// Android artifact (5.3.2) is the download transport. The library AAR
+/// stays thin (its Gradle dependencies are declared by the SDK's POM and
 /// example), so an embedding app resolves the same artifacts itself.
 struct Dependency {
     /// The file the artifact is cached as.
@@ -374,25 +375,37 @@ struct Dependency {
     sha256: &'static str,
 }
 
-/// `androidx.webkit:webkit:1.15.0` and its resolved runtime closure.
+/// `androidx.webkit:webkit:1.15.0`,
+/// `com.squareup.okhttp3:okhttp-android:5.3.2` and their resolved runtime
+/// closures.
 ///
 /// `annotation` is the Kotlin multiplatform module, whose JVM classes are in
-/// `annotation-jvm`; its POMs pull `kotlin-stdlib` (1.7.10) and
+/// `annotation-jvm`; its POM pulls `kotlin-stdlib` and
 /// `org.jetbrains:annotations`. `kotlin-stdlib-common` is metadata only and
 /// carries no classes. `androidx.core` is used by
 /// `WebViewFeatureInternal`'s WebView-version check, but the whole artifact
 /// is used (not hand-picked classes): its nested implementations and
 /// interfaces are easy to miss.
-const DEPENDENCIES: [Dependency; 12] = [
+///
+/// OkHttp 5 publishes Kotlin Multiplatform metadata under `okhttp`; on
+/// Android the classes are in the `okhttp-android` AAR (the JVM artifact
+/// would select the desktop platform). Its POM requires `okio-jvm`,
+/// `kotlin-stdlib` 2.2.21, `androidx.annotation` 1.9.1 and AndroidX
+/// Startup; the `PlatformInitializer` class needs Startup's `Initializer`
+/// interface to dex, and Startup's own initializer references
+/// `androidx.tracing`. These are present even though the standalone dex
+/// does not merge the AAR's startup provider: the classes must resolve, and
+/// an embedding Gradle app merges them itself.
+const DEPENDENCIES: [Dependency; 16] = [
     Dependency {
         file: "webkit-1.15.0.aar",
         url: "https://dl.google.com/dl/android/maven2/androidx/webkit/webkit/1.15.0/webkit-1.15.0.aar",
         sha256: "241c90aac937b6562592976da5cc73100538bf255000f490ed37296da1773960",
     },
     Dependency {
-        file: "annotation-jvm-1.8.1.jar",
-        url: "https://dl.google.com/dl/android/maven2/androidx/annotation/annotation-jvm/1.8.1/annotation-jvm-1.8.1.jar",
-        sha256: "9aab326d9492800991854360ac248f493ce7f7c3183519309b78ace9e240f6f6",
+        file: "annotation-jvm-1.9.1.jar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/annotation/annotation-jvm/1.9.1/annotation-jvm-1.9.1.jar",
+        sha256: "1e343917ebf27ba96fe4dc52b1cad7fd32b738fbc6355bb6cd5b3b305d7212d0",
     },
     Dependency {
         file: "annotation-experimental-1.3.0.aar",
@@ -437,13 +450,39 @@ const DEPENDENCIES: [Dependency; 12] = [
         url: "https://dl.google.com/dl/android/maven2/androidx/collection/collection/1.0.0/collection-1.0.0.jar",
         sha256: "9c8d117b5c2bc120a1cdfeb857e05b495b16c36013570372a708f7827e3ac9f9",
     },
-    // The annotation artifacts are Kotlin: their POMs require the Kotlin
-    // standard library (and its `org.jetbrains:annotations`). Dexing them
-    // without it would leave annotation references unresolved.
+    // The annotation artifacts and OkHttp are Kotlin: their POMs require
+    // the Kotlin standard library (and its `org.jetbrains:annotations`).
+    // Dexing them without it would leave references unresolved. 2.2.21 is
+    // what okhttp-android 5.3.2 and okio-jvm 3.16.4 require; AndroidX
+    // annotation 1.9.1 resolves against it too. 5.4.0 and later Android
+    // artifacts declare minCompileSdk 36/37; this build compiles against 35.
     Dependency {
-        file: "kotlin-stdlib-1.7.10.jar",
-        url: "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.7.10/kotlin-stdlib-1.7.10.jar",
-        sha256: "e771fe74250a943e8f6346713201ff1d8cb95c3a5d1a91a22b65a9e04f6a8901",
+        file: "okhttp-android-5.3.2.aar",
+        url: "https://repo1.maven.org/maven2/com/squareup/okhttp3/okhttp-android/5.3.2/okhttp-android-5.3.2.aar",
+        sha256: "f1a78812ebeef4d45eee0dbeb4f27347210f564d2b8ee411f012ce8573b0a658",
+    },
+    Dependency {
+        file: "okio-jvm-3.16.4.jar",
+        url: "https://repo1.maven.org/maven2/com/squareup/okio/okio-jvm/3.16.4/okio-jvm-3.16.4.jar",
+        sha256: "2196b993cd34dbbd919e7e01f57a4781b58bee80f86106163e287c20343a96a7",
+    },
+    Dependency {
+        file: "kotlin-stdlib-2.2.21.jar",
+        url: "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.2.21/kotlin-stdlib-2.2.21.jar",
+        sha256: "6558a3d233da56a20934b32159f9db5f86ed5816ef098f78a2c223dc6abb79dd",
+    },
+    // `PlatformInitializer` implements Startup's `Initializer`, and
+    // Startup's `AppInitializer` references `androidx.tracing.Trace`:
+    // included so the dex has no missing interfaces or classes.
+    Dependency {
+        file: "startup-runtime-1.2.0.aar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/startup/startup-runtime/1.2.0/startup-runtime-1.2.0.aar",
+        sha256: "f51d361d17b30b09cfb9e2aebf301d113f99437cbf462a066092795fb60eddd2",
+    },
+    Dependency {
+        file: "tracing-1.0.0.aar",
+        url: "https://dl.google.com/dl/android/maven2/androidx/tracing/tracing/1.0.0/tracing-1.0.0.aar",
+        sha256: "07b8b6139665b884a162eccf97891ca50f7f56831233bf25168ae04f7b568612",
     },
     Dependency {
         file: "annotations-13.0.jar",
