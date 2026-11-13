@@ -474,7 +474,7 @@ define_class!(
         /// here.
         #[unsafe(method(download:didFailWithError:resumeData:))]
         fn failed(&self, download: &AnyObject, error: &NSError, _resume: Option<&NSData>) {
-            let Some(entry) = self
+            let Some(mut entry) = self
                 .ivars()
                 .state
                 .active
@@ -483,6 +483,11 @@ define_class!(
             else {
                 return;
             };
+            // WebKit requires its destination callback to be answered even
+            // when the transfer fails before the app chooses a path.
+            if let Some(decide) = entry.decide.take() {
+                decide.call(None);
+            }
             if !entry.offered {
                 return;
             }

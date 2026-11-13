@@ -176,6 +176,12 @@ common API. Configure endpoints that are intended for file delivery. The device 
 `COOKIE_INTERCEPT`; AndroidX WebKit supplies the request's actual Cookie header, retaining its browser context.
 An unavailable feature produces `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` on the view.
 
+Deploy this opt-in scope with a WebView provider verified against
+[Chromium CL 8813777](https://chromium-review.googlesource.com/c/chromium/src/+/8813777).
+The observed WebView 160.0.8159.0 advertises `COOKIE_INTERCEPT` but crashes on an ordinary
+`<a download>` link when it is enabled, before the app's interception callback. Validation passes on a locally
+patched provider; an official fixed provider version has not yet been established. The default scope is empty.
+
 The native request preserves its method and uses those request cookies. Redirects keep the same origin and path,
 with no cookies set by an intermediate response: another path may have cookies absent from the original request.
 Final response cookies are applied by WebView in the original request context. A redirected HTML response is

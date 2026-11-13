@@ -1665,6 +1665,7 @@ impl WebItem {
             self.downloads_unavailable_error();
             return;
         }
+        self.downloads_blank.set(false);
         let old = self.applied.borrow_mut().replace(p.clone());
         let scripts_changed = old.as_ref().is_none_or(|o| {
             o.injected_js != p.injected_js || o.injected_js_before != p.injected_js_before

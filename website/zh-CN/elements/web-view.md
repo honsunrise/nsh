@@ -138,6 +138,10 @@ TSX 使用相同配置：`android={{ downloads: { scope: ["https://files.example
 
 范围应指向用于文件交付的 HTTP(S) GET 端点。设备 WebView 需要提供 `COOKIE_INTERCEPT` 能力，AndroidX WebKit 会提供请求实际使用的 Cookie 头，保留浏览器的请求上下文；能力不可用时，视图报告 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`。
 
+启用此范围配置前，应使用已验证包含 [Chromium CL 8813777](https://chromium-review.googlesource.com/c/chromium/src/+/8813777) 修复的 WebView 提供程序。
+实测 WebView 160.0.8159.0 虽然声明支持 `COOKIE_INTERCEPT`，但开启后点击普通 `<a download>` 链接会在应用拦截回调之前崩溃。
+本地修复版已通过验证；目前尚未确定包含修复的官方发行版本。默认请求范围为空。
+
 原生请求保留请求方法并使用上述 Cookie。重定向保持同源、同路径，且中间响应不设置 Cookie：其他路径可能有原请求中没有的 Cookie。最终响应的 Cookie 由 WebView 按原请求上下文应用。重定向后的 HTML 以错误报告，不会冒充初始 URL 的文档。原 URL 的内联响应和附件使用 NSH 收到的那一次响应。范围内的原生客户端有自己的缓存和认证处理，应明确配置文件端点，而不是把它作为通用页面代理。
 
 Android 释放响应后才报告的下载具有 `source: "none"`。该通知不能证明原始方法，因此不能委托重新下载。对已持有、方法确定的 GET 显式委托会产生新的请求；一次性 URL 可能在原请求成功后拒绝新请求。

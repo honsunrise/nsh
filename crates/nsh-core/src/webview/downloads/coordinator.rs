@@ -771,6 +771,9 @@ impl Downloads {
                     // Not proof that the writer stopped: keep the session
                     // and its staging file until an end or a later reply
                     // says so; the app is told the stop was not confirmed.
+                    if let Some(cleanup) = &self.cleanup {
+                        cleanup.track(request, &key);
+                    }
                     self.commands.insert(
                         request,
                         Tracked {

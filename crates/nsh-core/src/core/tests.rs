@@ -43745,6 +43745,63 @@ mod download_decisions {
     }
 
     #[test]
+    fn a_late_stop_after_failed_cancel_and_core_drop_cleans_staging() {
+        reset();
+        let dir = scratch("failed-cancel-shutdown");
+        let destination = dir.join("out.bin");
+        std::fs::write(&destination, b"keep").unwrap();
+        let sink = crate::webview::downloads::DownloadCleanup::new();
+        let mut c = core();
+        c.set_download_cleanup(sink.clone());
+        c.mount_root(&crate::element::Root::new::<ManualDownloads>(|| ()));
+        let web = web_node(&c.commit().unwrap());
+        assert!(c.component_event(
+            web,
+            EventKind::DownloadOffer,
+            &offer("late-stop", "out.bin", None)
+        ));
+        pump(&mut c);
+        let held = pending().expect("the pending download");
+        drop(held.accept(DownloadDestination::new(destination.clone()).overwrite(true)));
+        c.apply_actions();
+        let (_, start, _) = wait_request(&mut c);
+        reply_ok(&mut c, web, start);
+        let _ = wait_downloads(&mut c, 1);
+        let staging = staging_in(&dir).expect("the staging directory");
+        std::fs::write(staging.join("out.bin"), b"partial").unwrap();
+
+        let answer = held.cancel();
+        c.apply_actions();
+        let (_, cancel, _) = wait_request(&mut c);
+        assert!(c.component_event(
+            web,
+            EventKind::WebViewReply,
+            &reply(cancel, Err("stop not confirmed".into()))
+        ));
+        pump(&mut c);
+        assert!(matches!(settled(answer), Some(Err(_))));
+        drop(c);
+        assert!(staging.exists(), "a failed cancel cannot authorize cleanup");
+
+        sink.dispatch(
+            web + 2,
+            EventKind::WebViewReply,
+            &reply(cancel, Ok(crate::JsonValue::Null)),
+        );
+        assert!(staging.exists(), "a foreign reply cannot authorize cleanup");
+        sink.dispatch(
+            web,
+            EventKind::WebViewReply,
+            &reply(cancel, Ok(crate::JsonValue::Null)),
+        );
+        until("the late stop's cleanup", || {
+            (!staging.exists()).then_some(())
+        });
+        assert_eq!(std::fs::read(&destination).unwrap(), b"keep");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_finish_before_the_start_reply_starts_once_then_finishes() {
         reset();
         let dir = scratch("end-before-start");
