@@ -157,8 +157,14 @@ final class Mounter {
      * and its `onFocus` / `onBlur` listeners hear it as an input's do.
      */
     private final View.OnFocusChangeListener focusChange = (view, focused) -> {
-        if (!(view instanceof Node) || handle() == 0) return;
+        if (!(view instanceof Node)) return;
         int id = ((Node) view).nodeId();
+        // A programmatic focus only opts this focus session into touch
+        // mode. Once it ends, default buttons must remain touch-neutral.
+        if (!focused && !Focusable.touch(focusProps.get(id, -1))) {
+            view.setFocusableInTouchMode(false);
+        }
+        if (handle() == 0) return;
         reportState(id, STATE_FOCUSED, focused);
         if (wants(id, focused ? Native.FOCUS : Native.BLUR)) {
             event(id, focused ? Native.FOCUS : Native.BLUR);
@@ -180,9 +186,10 @@ final class Mounter {
             boolean nativeFocused = keyNode(view.getRootView().findFocus(), 1) == 0;
             boolean touchMode = view.getRootView().isInTouchMode();
             if (Focusable.pointer(prop, nativeFocused, touchMode) && focusStop(id) && !view.isFocused()) {
-                // The input is the pointer's only when the focus moved: a
-                // default pressable requests no touch-mode focus.
-                if (view.requestFocus() && handle() != 0) Native.pointerInput(handle());
+                // requestFocus invokes focusChange synchronously. Mark the
+                // pointer modality first so focus-visible is not keyboard's.
+                if (handle() != 0) Native.pointerInput(handle());
+                view.requestFocus();
             }
         }
         return false;
