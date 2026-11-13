@@ -4,9 +4,14 @@ package com.longbridge.nsh;
  * The `focusable` decision, kept free of Android types so it is testable
  * on a plain JDK: `ViewProps::focus_stop`'s rule. Unset leaves the view a
  * stop when it takes presses; `true` makes any view one; `false` keeps it
- * out; a disabled view is never a stop. A pointer press focuses any stop,
- * but a default pressable leaves the focus to a text input or hosted
- * native view that has it; only an explicit `true` takes it from them.
+ * out; a disabled view is never a stop.
+ *
+ * <p>Only an explicit `true` opts into touch-mode focus. A default
+ * pressable stays a hardware/Tab focus stop: keyboard focus still reveals
+ * it in its scroll view, while Android's touch-mode focus path never pulls
+ * the focus out of an input or hosted view on a tap. A programmatic
+ * `ref.focus()` is an explicit request of its own and opts in for the
+ * focus it takes.
  */
 final class Focusable {
     private Focusable() {}
@@ -19,12 +24,22 @@ final class Focusable {
         return takesPresses;
     }
 
-    /** Whether a view with `prop` is a Tab stop; see {@link #stop}. */
-    static boolean pointer(int prop, boolean nativeFocus) {
-        // An explicit focusable always takes a pointer press. A default
-        // pressable stop does too, unless a text input or hosted native
-        // view has the focus: a tap on a button must not steal an input's
-        // editing (and hide its keyboard).
-        return prop == 1 || (prop == -1 && !nativeFocus);
+    /** Whether a view with `prop` is focusable in touch mode: only an explicit `true` opts in. */
+    static boolean touch(int prop) {
+        return prop == 1;
+    }
+
+    /**
+     * Whether a pointer press on a view with `prop` takes the focus, given
+     * whether a text input or hosted native view has it (`nativeFocus`) and
+     * whether the window is in touch mode. An explicit focusable always
+     * takes it (it is focusable in touch mode). A default pressable takes
+     * it only outside touch mode, where Android can focus it without
+     * leaving the input's editing (a tap on a button must not hide its
+     * keyboard).
+     */
+    static boolean pointer(int prop, boolean nativeFocus, boolean touchMode) {
+        if (prop == 1) return true;
+        return prop == -1 && !nativeFocus && !touchMode;
     }
 }

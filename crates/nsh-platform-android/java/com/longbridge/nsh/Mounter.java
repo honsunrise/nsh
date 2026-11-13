@@ -166,18 +166,23 @@ final class Mounter {
     };
     /**
      * A press on a managed stop focuses it before its press handlers run
-     * (the focus-a-visible-control behavior the contract asks for). A
-     * default pressable leaves the focus to a text input or hosted native
-     * view that has it; an explicit `focusable` takes it anywhere.
+     * (the focus-a-visible-control behavior the contract asks for), where
+     * the focus can go: an explicit `focusable` takes it anywhere,
+     * including touch mode; a default pressable only outside touch mode,
+     * and never from a text input or hosted native view (only an explicit
+     * `focusable` does). A touch-mode tap therefore leaves an input
+     * editing and its keyboard up.
      */
     private final View.OnTouchListener pointerFocus = (view, e) -> {
         if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN && view instanceof Node) {
             int id = ((Node) view).nodeId();
             int prop = focusProps.get(id, -1);
             boolean nativeFocused = keyNode(view.getRootView().findFocus(), 1) == 0;
-            if (Focusable.pointer(prop, nativeFocused) && focusStop(id) && !view.isFocused()) {
-                if (handle() != 0) Native.pointerInput(handle());
-                view.requestFocus();
+            boolean touchMode = view.getRootView().isInTouchMode();
+            if (Focusable.pointer(prop, nativeFocused, touchMode) && focusStop(id) && !view.isFocused()) {
+                // The input is the pointer's only when the focus moved: a
+                // default pressable requests no touch-mode focus.
+                if (view.requestFocus() && handle() != 0) Native.pointerInput(handle());
             }
         }
         return false;
@@ -2805,7 +2810,10 @@ final class Mounter {
      * Applies `focusable` (and whether the view takes presses) to a managed
      * view: Android's own focus carries it, so Tab/Shift+Tab and
      * `requestFocus` work, and the focus listeners report `FOCUSED`,
-     * `onFocus` and `onBlur` to the core.
+     * `onFocus` and `onBlur` to the core. Only an explicit `focusable` is
+     * focusable in touch mode; a default pressable is a hardware/Tab stop
+     * whose keyboard focus still reveals it in its scroll view, but which
+     * never takes a touch-mode focus.
      */
     private void updateFocusable(int id, View v) {
         if (v == null || id <= 1 || !managed(v)) return;
@@ -2816,16 +2824,33 @@ final class Mounter {
             releaseFocus(v);
         }
         if (v.isFocusable() != stop) v.setFocusable(stop);
-        if (v.isFocusableInTouchMode() != stop) v.setFocusableInTouchMode(stop);
+        // Only an explicit `focusable` (or a programmatic `ref.focus()`,
+        // which sets this itself) opts into touch-mode focus. A default
+        // pressable stays a hardware/Tab stop, so Android's touch-mode
+        // focus path never pulls the focus out of an input or hosted view
+        // on a tap. Keep the flag while the view holds the focus: a props
+        // update must not blur a `ref.focus()` on a default pressable.
+        boolean touch = stop && Focusable.touch(focusProps.get(id, -1));
+        if (touch) {
+            if (!v.isFocusableInTouchMode()) v.setFocusableInTouchMode(true);
+        } else if ((!stop || !v.isFocused()) && v.isFocusableInTouchMode()) {
+            v.setFocusableInTouchMode(false);
+        }
         if (Build.VERSION.SDK_INT >= 26) v.setDefaultFocusHighlightEnabled(false);
         v.setOnFocusChangeListener(stop ? focusChange : null);
-        // A press focuses a managed stop; a default pressable leaves the
-        // focus to a text input or hosted native view that has it (only an
-        // explicit `focusable` takes it there).
+        // A press focuses a managed stop where the focus can go: an
+        // explicit `focusable` in touch mode too, a default pressable only
+        // outside it, and never from a text input or hosted native view
+        // that has the focus.
         v.setOnTouchListener(stop ? pointerFocus : null);
     }
 
-    /** `ref.focus()` on a managed stop: makes it focusable and focuses it. */
+    /**
+     * `ref.focus()` on a managed stop: makes it focusable and focuses it.
+     * The request is explicit, so it opts into touch-mode focus as an
+     * explicit `focusable` does; `updateFocusable` keeps that while the
+     * view holds the focus.
+     */
     void focusManaged(int id) {
         View v = views.get(id);
         if (v == null || !v.isShown() || !focusStop(id)) return;
@@ -2937,14 +2962,19 @@ final class Mounter {
     /**
      * Whether a mounted {@code captureKeys} rule of the focused view or an
      * enabled ancestor captures {@code e}: the same canonical shortcut key
-     * as `keymap.rs`, on the UI thread, before Android's defaults.
+     * as `keymap.rs`, on the UI thread, before Android's defaults. A
+     * system key ({@code KeyEvent.isSystem}: Back, Home, volume, media)
+     * is never captured, not even by {@code all}; Android keeps its
+     * default. The raw notification is a separate decision and still
+     * reaches the listeners ({@link #keyListens}).
      */
     boolean keyCaptured(int focused, int window, android.view.KeyEvent e) {
         int key = KeyCaptures.eventKey(e.getKeyCode(), e.getUnicodeChar(0));
         int modifiers = KeyCaptures.modifiers(e.getMetaState());
+        boolean system = e.isSystem();
         int id = focused;
         while (id > 0) {
-            if (keyEnabled(id) && KeyCaptures.matches(keyCaptures.get(id), key, modifiers)) {
+            if (keyEnabled(id) && KeyCaptures.captured(keyCaptures.get(id), key, modifiers, system)) {
                 return true;
             }
             if (id == window || id == 1) break;
@@ -2957,8 +2987,10 @@ final class Mounter {
 
     /**
      * Tab or Shift+Tab from `focus`: the next managed stop or input in
-     * native tree order, around the ends. Hosted native content keeps Tab
-     * for itself (`false`).
+     * native tree order. The first and last stop yield ({@code false}) to
+     * the embedding Android host instead of wrapping, so Android's own
+     * focus search and defaults get that Tab. Hosted native content keeps
+     * Tab for itself ({@code false}).
      */
     boolean moveFocus(View windowRoot, View focus, boolean forward) {
         if (hostedFocus(focus)) return false;
@@ -2976,20 +3008,20 @@ final class Mounter {
                 if (holder < 0 && holds(stops.get(i), focus)) holder = i;
             }
             if (index < 0) index = holder;
-        } else if (!forward) {
-            index = stops.size();
         }
-        if (forward) {
-            index = index < 0 ? 0 : (index + 1) % stops.size();
-        } else {
-            index = index <= 0 ? stops.size() - 1 : index - 1;
-        }
+        index = TabOrder.next(index, stops.size(), forward);
+        if (index < 0) return false;
         View next = stops.get(index);
         if (next instanceof InputBox) {
             ((InputBox) next).focus();
             return true;
         }
-        return next.requestFocus();
+        // A Tab is a keyboard transition: leave touch mode as a hardware
+        // key does, so a default pressable (not focusable in touch mode)
+        // takes the focus from a real or a synthetic Tab alike. The
+        // enclosing scroll view still reveals the stop (ScrollView's
+        // requestChildFocus), as for any keyboard focus.
+        return next.requestFocusFromTouch();
     }
 
     /** Collects the Tab stops under `view` in tree order. */

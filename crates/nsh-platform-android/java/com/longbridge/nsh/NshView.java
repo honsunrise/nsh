@@ -117,9 +117,11 @@ public class NshView extends FrameLayout {
     /**
      * A hardware keyboard's keys go to the app's shortcuts ({@code nsh/keymap}) and the focused
      * view's {@code captureKeys} rules before it gets them: a key a binding or a capture takes is
-     * consumed, with its release (the input never sees it). A view with no raw listener and no
-     * capture leaves the key to Android; Tab and Shift+Tab then move the focus between managed
-     * stops and inputs.
+     * consumed, with its release (the input never sees it). A system key (Back, Home, volume,
+     * media) is never captured, even by {@code all}, and its raw notification is unaffected. A
+     * view with no raw listener and no capture leaves the key to Android; Tab and Shift+Tab then
+     * move the focus between managed stops and inputs, yielding to Android at the first and last
+     * stop.
      */
     @Override
     public boolean dispatchKeyEvent(android.view.KeyEvent e) {

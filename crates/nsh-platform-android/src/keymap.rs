@@ -21,7 +21,10 @@
 //! batch (`Mounter.java` keeps it) and matched on the UI thread with
 //! `KeyCaptures.java`, before Android's defaults: the event carries
 //! `captured: true` and `dispatchKeyEvent` returns `true` (no Tab
-//! traversal, back, menu, activation or typed character). A release is
+//! traversal, focused-control activation or typed character). A system key
+//! (`KeyEvent.isSystem()`: Back, Home, volume, media, ...) is never
+//! captured, not even by `all`: Android keeps its own default, and the raw
+//! notification still reaches the focused view's listeners. A release is
 //! decided from the focus, listeners and mounted rules at the moment it
 //! arrives (a shortcut whose press it consumed keeps the release
 //! consumed); releasing, cancelling or losing the window forgets the held
@@ -29,13 +32,19 @@
 //!
 //! Managed views take real focus, not only the root: `focusable={true}`,
 //! or unset on a view that takes presses, is an Android focus stop
-//! (`focusable={false}` and disabled views are not). Tab and Shift+Tab
-//! walk the managed stops and inputs in native tree order, around the
-//! ends; a press on a stop focuses it (while a text input or hosted native
-//! view has the focus, only an explicit `focusable` stop takes it, so a
-//! tap on a button leaves the input editing); `ref.focus()` /
-//! `ref.blur()` focus and blur them; and `FOCUSED`, `onFocus` and
-//! `onBlur` reach the core as for an input.
+//! (`focusable={false}` and disabled views are not). Only an explicit
+//! `focusable={true}` (or a programmatic `ref.focus()`) is focusable in
+//! touch mode: a default pressable stays a hardware/Tab stop, revealed by
+//! keyboard focus in its scroll view, but a touch-mode tap does not focus
+//! it and never pulls the focus out of a text input or hosted native view.
+//! Tab and Shift+Tab walk the managed stops and inputs in native tree
+//! order and yield to the embedding host at the first/last stop instead of
+//! wrapping; a press on a stop focuses it where the focus can go (an
+//! explicit `focusable` in touch mode too; a default pressable outside
+//! touch mode and when no native child has the focus, so a tap on a button
+//! leaves an input editing); `ref.focus()` / `ref.blur()` focus and blur
+//! them; and `FOCUSED`, `onFocus` and `onBlur` reach the core as for an
+//! input.
 //! `NshView` itself is the root stop when no managed view has the focus
 //! (the event goes to [`nsh_core::ROOT_ID`]). A `<modal>` dialog window
 //! runs the same dispatch with its own focus, fallback root and Tab order;
@@ -73,13 +82,13 @@
 //! ```sh
 //! adb shell input keyevent 29               # a: a raw KeyDown and KeyUp
 //! adb shell input keyevent --longpress 29   # auto-repeat KeyDowns
-//! adb shell input keyevent 61               # Tab: native focus stays default
-//! adb shell input keyevent 4                # back: the app's back handling
+//! adb shell input keyevent 61               # Tab: next managed stop (the last yields)
+//! adb shell input keyevent 4                # back: never captured; the app's back handling
 //! nsh test app.tsx --target android <<'EOF'
 //! app.pressKeys("shift+a")                  # KeyEvent with META_SHIFT_ON
 //! app.pressKeys("ctrl+tab")                 # keymap first, then capture
-//! app.pressKeys("tab")                      # next managed stop or input
-//! app.pressKeys("shift+tab")                # previous
+//! app.pressKeys("tab")                      # next managed stop or input (host at the end)
+//! app.pressKeys("shift+tab")                # previous (host at the start)
 //! app.pressKeys("enter")                    # the focused view's Return
 //! # with a <modal> open, keys and Tab act on that dialog window's focus
 //! EOF

@@ -16,6 +16,15 @@ import android.view.View;
  * synchronously on the UI thread from mounted state; a release uses the
  * focus, listeners and capture rules of the moment it arrives.
  *
+ * <p>A system key ({@code KeyEvent.isSystem}: Back, Home, volume, media) is
+ * never captured, not even by {@code captureKeys: "all"}: Android keeps its
+ * default. The raw {@code onKeyDown} / {@code onKeyUp} observation is
+ * unaffected.
+ *
+ * <p>Tab and Shift+Tab move between the managed stops and inputs in tree
+ * order. At the first or last stop they yield to Android's own focus and
+ * default handling instead of wrapping, so an app never traps Tab.
+ *
  * <p>An uncaptured Return or Space down reaches Android's native pressed
  * state. If a repeat or release becomes captured, the native state is
  * cancelled with a `FLAG_CANCELED` up, so no stale press and no click
@@ -57,11 +66,13 @@ final class KeyDispatch {
                 return true;
             }
             boolean tab = isTab(e);
-            if (!tab) tabMoved = false;
             if (tab && mounter.moveFocus(root, focus(), !e.isShiftPressed())) {
                 tabMoved = true;
                 return true;
             }
+            // Not a Tab, or a Tab the stops yielded at an end: its release
+            // belongs to Android too, not to an earlier move of this press.
+            tabMoved = false;
             nativeCancelled.remove(e.getKeyCode());
             View focus = focus();
             if (focus != null && focus != root && mounter.keyNode(focus, fallback) > 1

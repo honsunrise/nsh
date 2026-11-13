@@ -13,7 +13,9 @@ package com.longbridge.nsh;
  * </pre>
  *
  * The policy arrays are what {@code encode.rs} {@code key_capture} writes:
- * {@code [mode]} or {@code [Keys, count, key, modifiers, ...]}.
+ * {@code [mode]} or {@code [Keys, count, key, modifiers, ...]}. A system
+ * key (`KeyEvent.isSystem()`) is declined by every rule, even `all`, while
+ * the raw notification path stays distinct.
  */
 public final class KeyCaptureTest {
     public static void main(String[] args) {
@@ -23,6 +25,23 @@ public final class KeyCaptureTest {
         check("none captures nothing", !KeyCaptures.capturesAnything(policyNone()));
         check("all captures any key", KeyCaptures.matches(policyAll(), 'a', 0));
         check("all captures an unnamed key", KeyCaptures.matches(policyAll(), Integer.MIN_VALUE, 0));
+
+        // A system key (`KeyEvent.isSystem`: Back and volume have no
+        // capture id, so they reach a rule as MIN_VALUE) is declined by
+        // every rule, even all. The raw observation path is separate:
+        // `capturesAnything` still asks for the event.
+        check("all declines an unnamed system key",
+                !KeyCaptures.captured(policyAll(), Integer.MIN_VALUE, 0, true));
+        check("all declines a named system key",
+                !KeyCaptures.captured(policyAll(), KeyCaptures.ENTER, KeyCaptures.CTRL, true));
+        check("the raw path still asks for a system key",
+                KeyCaptures.capturesAnything(policyAll()));
+        check("a listed key is still declined when the event is a system key",
+                !KeyCaptures.captured(policy(KeyCaptures.KEYS, 1, 'a', 0), 'a', 0, true));
+        check("a non-system key still follows all",
+                KeyCaptures.captured(policyAll(), 'a', 0, false));
+        check("a listed non-system key still matches",
+                KeyCaptures.captured(policy(KeyCaptures.KEYS, 1, 'a', 0), 'a', 0, false));
         check("keys with no entries is none",
                 !KeyCaptures.capturesAnything(policy(KeyCaptures.KEYS, 0)));
         check("an empty keys rule captures nothing",

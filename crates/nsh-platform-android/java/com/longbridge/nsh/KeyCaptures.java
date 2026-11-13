@@ -14,6 +14,11 @@ package com.longbridge.nsh;
  * count and each key's id and modifiers. {@code keymap.rs}
  * {@code capture_key} and {@code capture_modifiers} write it; this class
  * is the reader, kept in step by {@code KeyCaptureTest}.
+ *
+ * <p>A rule never captures a system key ({@code KeyEvent.isSystem()}: Back,
+ * Home, volume, media, ...), not even {@code all}: the OS keeps those
+ * defaults. That is only the capture decision; the raw {@code onKeyDown} /
+ * {@code onKeyUp} observation is unaffected.
  */
 final class KeyCaptures {
     static final int NONE = 0;
@@ -38,7 +43,10 @@ final class KeyCaptures {
         return policy[0] == ALL || (policy[0] == KEYS && policy.length > 1 && policy[1] > 0);
     }
 
-    /** Whether {@code policy} captures the key {@code key} with {@code modifiers}. */
+    /**
+     * Whether {@code policy} matches the key {@code key} with
+     * {@code modifiers}, the system-key rule aside ({@link #captured}).
+     */
     static boolean matches(int[] policy, int key, int modifiers) {
         if (policy == null || policy.length == 0) return false;
         if (policy[0] == ALL) return true;
@@ -50,6 +58,18 @@ final class KeyCaptures {
             if (policy[at] == key && policy[at + 1] == modifiers) return true;
         }
         return false;
+    }
+
+    /**
+     * Whether {@code policy} consumes the key event: a system key
+     * ({@code KeyEvent.isSystem()}: Back, Home, volume, media, ...) is
+     * never captured, not even by {@code all}, so Android keeps its own
+     * default; every other key follows {@link #matches}. The raw
+     * notification is a separate decision: a listener still hears the
+     * system key ({@code Mounter.keyListens} is unchanged).
+     */
+    static boolean captured(int[] policy, int key, int modifiers, boolean system) {
+        return !system && matches(policy, key, modifiers);
     }
 
     /** `KeyEvent.META_*_ON`. */
