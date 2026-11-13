@@ -87,10 +87,8 @@ impl Headless {
     /// back from.
     pub fn press_key(&mut self, keys: &str) -> Result<(), String> {
         self.step(format!("keyboard.press({keys})"));
-        match self.send_key(keys)? {
-            true => self.back(),
-            false => self.done(),
-        }
+        self.send_key(keys)?;
+        self.done()
     }
 
     /// Presses `keys` one after another, each as [`Headless::press_key`]
@@ -101,15 +99,15 @@ impl Headless {
         self.step(format!("keyboard.press({})", keys.join(", ")));
         for key in keys {
             if self.send_key(key)? {
-                return self.back();
+                return self.done();
             }
         }
         self.done()
     }
 
-    /// Sends key `keys` to the app, unsettled: true when it goes back
-    /// (Escape with something to go back from), which is left to the
-    /// caller.
+    /// Sends key `keys` without settling, except a Back transition must
+    /// finish before its release is reported. True ends a typed-ahead batch
+    /// after that Back transition; the caller settles the remaining events.
     fn send_key(&mut self, keys: &str) -> Result<bool, String> {
         self.input_with(nsh_core::platform::InputModality::Keyboard);
         let stroke = Keystroke::parse(keys, self.environment.os).map_err(|e| e.to_string())?;
@@ -162,7 +160,7 @@ impl Headless {
             && self.screen.accepts_key_focus(view)
         {
             if self.screen.hosts_native(view) {
-                return self.done();
+                return Ok(false);
             }
             let mut event = view_key_event(&stroke, true);
             let captured = self.screen.captures_key(view, &stroke);
@@ -182,6 +180,7 @@ impl Headless {
             false
         };
         let m = stroke.modifiers;
+        let mut go_back = false;
         // What the platform does with an uncaptured key, in the order the
         // platforms run it; the release follows below.
         if !captured {
@@ -275,12 +274,12 @@ impl Headless {
                     && !m.shift
                     && self.screen.back_target() != crate::screen::Back::Nothing
                 {
-                    // The target above rules out the only failure (nothing
-                    // to go back from).
-                    let _ = self.back();
+                    go_back = true;
                 }
             }
-
+        }
+        if go_back {
+            self.back()?;
         }
         // The release follows what the key did, as a platform sends it, to
         // the view focused now (a default may have moved it) with the
@@ -298,7 +297,7 @@ impl Headless {
                 .control()
                 .dispatch_event(view, EventKind::KeyUp, EventPayload::Key(up));
         }
-        self.done()
+        Ok(go_back)
     }
 
     /// The keyboard asked view `from` (the keyboard focus) for its context
