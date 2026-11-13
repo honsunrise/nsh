@@ -707,7 +707,11 @@ impl Downloads {
             return Vec::new();
         }
         self.commands.remove(&request);
-        if let Some(cleanup) = &self.cleanup {
+        // A failed cancel leaves the stop unconfirmed. Keep its registration
+        // intact: the platform can report a late success from another thread.
+        if !(matches!(tracked.track.kind, CommandKind::Cancel) && result.is_err())
+            && let Some(cleanup) = &self.cleanup
+        {
             cleanup.untrack(request);
         }
         let key = tracked.track.key.clone();
@@ -771,9 +775,6 @@ impl Downloads {
                     // Not proof that the writer stopped: keep the session
                     // and its staging file until an end or a later reply
                     // says so; the app is told the stop was not confirmed.
-                    if let Some(cleanup) = &self.cleanup {
-                        cleanup.track(request, &key);
-                    }
                     self.commands.insert(
                         request,
                         Tracked {
